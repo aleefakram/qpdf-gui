@@ -1,0 +1,30 @@
+# QPDF Decryptor (qpdf-gui)
+
+> Free, open-source Windows desktop application to remove encryption, user passwords, and owner restriction locks (printing/copying restrictions) from PDF documents locally using QPDF engine.
+
+## Project Summary
+- **Name**: QPDF Decryptor (qpdf-gui)
+- **Primary Function**: Removes PDF passwords, restrictions, and encryption fast and 100% offline.
+- **Platform**: Windows 10 / 11 (64-bit standalone executable, WPF framework).
+- **Engine**: Powered by QPDF (C++ PDF manipulation engine).
+- **Privacy Guarantee**: 100% local execution. Files are never uploaded to any remote server or cloud service.
+- **Dependencies**: Zero external dependencies (.NET runtime embedded, single-file publish).
+- **License**: MIT License (GUI), Apache 2.0 (bundled QPDF binary).
+
+## Core Capabilities & Features
+- **Remove Owner Passwords**: Strips restriction flags allowing copying, printing, editing, and annotating locked PDFs even if owner password is unknown.
+- **Remove User Passwords**: Decrypts password-protected PDFs when valid password is supplied.
+- **Drag & Drop GUI**: Simple drag-and-drop workflow for PDF files.
+- **Secure Password Handling**: Passwords sent directly to QPDF executable via stdin (prevents password exposure in process listing or task manager logs).
+- **Original File Preservation**: Non-destructive decryption; creates a new unlocked PDF copy.
+
+## System Requirements & Build
+- OS: Windows 10/11 x64
+- Framework: WPF (.NET Desktop Development)
+- Build Tools: Visual Studio 2022 or `dotnet` CLI with MSVC/MSYS2 toolchain.
+
+## Key Links & Resources
+- [GitHub Repository](https://github.com/aleefakram/qpdf-gui)
+- [Releases & Download Installer](https://github.com/aleefakram/qpdf-gui/releases)
+- [QPDF Core Engine](https://github.com/qpdf/qpdf)
+- [License Information](https://github.com/aleefakram/qpdf-gui/blob/main/LICENSE.txt)
