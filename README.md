@@ -1,8 +1,8 @@
 # QPDF Decryptor
 
-[![GitHub Release](https://img.shields.io/github/v/release/aleefakram/qpdf-gui?style=flat-square&color=blue)](../../releases)
+[![GitHub Release](https://img.shields.io/github/v/release/aleefakram/qpdf-gui?style=flat-square&color=blue)](https://github.com/aleefakram/qpdf-gui/releases/tag/v1.0.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE.txt)
-[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows)](../../releases)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows)](https://github.com/aleefakram/qpdf-gui/releases/tag/v1.0.0)
 [![Powered By: QPDF](https://img.shields.io/badge/Powered%20by-QPDF-orange?style=flat-square)](https://github.com/qpdf/qpdf)
 
 A fast, lightweight Windows app to remove passwords, restrictions, and encryption from PDF files. Drop your file, enter the password if needed, pick where to save — that's it.
@@ -48,11 +48,12 @@ QPDF Decryptor runs entirely on your desktop:
 
 ## Download & Usage
 
-1. Download the latest installer or portable executable from [Releases](../../releases).
+1. Download the latest installer or portable executable from [Releases](https://github.com/aleefakram/qpdf-gui/releases/tag/v1.0.0).
 2. Launch `QpdfDecryptor.exe`.
 3. Drag & drop a PDF onto the window (or click **Choose PDF**).
 4. Enter the password if required (leave blank if stripping printing/copying restrictions).
 5. Click **Decrypt PDF**.
+
 
 ---
 

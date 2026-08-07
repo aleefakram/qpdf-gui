@@ -25,6 +25,6 @@
 
 ## Key Links & Resources
 - [GitHub Repository](https://github.com/aleefakram/qpdf-gui)
-- [Releases & Download Installer](https://github.com/aleefakram/qpdf-gui/releases)
+- [Releases & Download Installer](https://github.com/aleefakram/qpdf-gui/releases/tag/v1.0.0)
 - [QPDF Core Engine](https://github.com/qpdf/qpdf)
 - [License Information](https://github.com/aleefakram/qpdf-gui/blob/main/LICENSE.txt)
