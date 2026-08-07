@@ -1,0 +1,41 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{15C672FC-381F-4CA6-9F9F-6E8A9B6F5707}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QPdfDecryptor.Core", "src\QPdfDecryptor.Core\QPdfDecryptor.Core.csproj", "{CB96600D-1899-4D1A-8825-68B00103A447}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QPdfDecryptor", "src\QPdfDecryptor\QPdfDecryptor.csproj", "{EB8F92A0-FEB7-49D8-A09A-3A08FEB4BF18}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QPdfDecryptor.Core.Tests", "src\QPdfDecryptor.Core.Tests\QPdfDecryptor.Core.Tests.csproj", "{66E98BB1-F63E-4A53-A39A-F6FFB3C9FF06}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CB96600D-1899-4D1A-8825-68B00103A447}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CB96600D-1899-4D1A-8825-68B00103A447}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CB96600D-1899-4D1A-8825-68B00103A447}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CB96600D-1899-4D1A-8825-68B00103A447}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EB8F92A0-FEB7-49D8-A09A-3A08FEB4BF18}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EB8F92A0-FEB7-49D8-A09A-3A08FEB4BF18}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EB8F92A0-FEB7-49D8-A09A-3A08FEB4BF18}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EB8F92A0-FEB7-49D8-A09A-3A08FEB4BF18}.Release|Any CPU.Build.0 = Release|Any CPU
+		{66E98BB1-F63E-4A53-A39A-F6FFB3C9FF06}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{66E98BB1-F63E-4A53-A39A-F6FFB3C9FF06}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{66E98BB1-F63E-4A53-A39A-F6FFB3C9FF06}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{66E98BB1-F63E-4A53-A39A-F6FFB3C9FF06}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{CB96600D-1899-4D1A-8825-68B00103A447} = {15C672FC-381F-4CA6-9F9F-6E8A9B6F5707}
+		{EB8F92A0-FEB7-49D8-A09A-3A08FEB4BF18} = {15C672FC-381F-4CA6-9F9F-6E8A9B6F5707}
+		{66E98BB1-F63E-4A53-A39A-F6FFB3C9FF06} = {15C672FC-381F-4CA6-9F9F-6E8A9B6F5707}
+	EndGlobalSection
+EndGlobal

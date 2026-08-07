@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>..\..\logo\qpdf.ico</ApplicationIcon>
+    <AssemblyName>QpdfDecryptor</AssemblyName>
+    <RootNamespace>QPdfDecryptor</RootNamespace>
+    <QpdfRuntimeDirectory Condition="'$(QpdfRuntimeDirectory)' == ''">$(MSBuildProjectDirectory)\Native</QpdfRuntimeDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QPdfDecryptor.Core\QPdfDecryptor.Core.csproj" />
+    <Resource Include="..\..\logo\qpdf.ico" Link="Assets\qpdf.ico" />
+    <Content Include="$(QpdfRuntimeDirectory)\**\*" Link="Native\%(RecursiveDir)%(Filename)%(Extension)"
+             Condition="Exists('$(QpdfRuntimeDirectory)')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

@@ -15,6 +15,22 @@ Doxyfile
 # ./Testing is created if you run ctest from the wrong place.
 /Testing
 
+# .NET/WPF GUI build outputs and bundled native runtime
+**/bin/
+**/obj/
+/artifacts/
+/.build-tmp/
+/src/QPdfDecryptor/Native/
+
+# Internal docs — not for public repo
+DESIGN.md
+PRODUCT.md
+
+# Agent / IDE tooling dirs
+.agents/
+.impeccable/
+/docs/superpowers/
+
 # macOS junk files
 .DS_Store
 ._*
