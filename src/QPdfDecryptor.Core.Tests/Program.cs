@@ -30,7 +30,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Unencrypted file is copied to the output folder", UnencryptedFileIsCopied),
     ("Corrupt file fails without stopping the batch", CorruptFileFailsWithoutStoppingBatch),
     ("Winning password is tried first for the next file", WinningPasswordIsTriedFirstForNextFile),
-    ("Owner-restricted file decrypts without a password", OwnerOnlyFileDecryptsWithoutPassword)
+    ("Owner-restricted file decrypts without a password", OwnerOnlyFileDecryptsWithoutPassword),
+    ("Existing output is renamed when policy is AutoRename", ExistingOutputIsRenamed),
+    ("Existing output is skipped when policy is Skip", ExistingOutputIsSkipped)
 };
 
 var failures = 0;
@@ -447,6 +449,82 @@ static async Task WinningPasswordIsTriedFirstForNextFile()
     {
         Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
         Environment.SetEnvironmentVariable("FAKE_QPDF_LOG", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ExistingOutputIsRenamed()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllTextAsync(acceptFile, "correct");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+
+        var outputDirectory = Path.Combine(directory, "out");
+        Directory.CreateDirectory(outputDirectory);
+        var existingOutput = Path.Combine(outputDirectory, "a1.pdf");
+        await File.WriteAllTextAsync(existingOutput, "existing output");
+        var input = Path.Combine(directory, "a1.pdf");
+        await File.WriteAllTextAsync(input, "input");
+
+        var service = new BulkDecryptService();
+        var result = await service.DecryptAsync(new BulkDecryptRequest(
+            Environment.ProcessPath!,
+            new[] { input },
+            new[] { "correct" },
+            outputDirectory,
+            ConflictPolicy.AutoRename));
+
+        Assert(result.Files[0].Outcome == FileOutcome.Decrypted, "The file was not decrypted.");
+        Assert(result.Files[0].OutputPath == Path.Combine(outputDirectory, "a1 (2).pdf"),
+            $"The output was not renamed: {result.Files[0].OutputPath}");
+        Assert(await File.ReadAllTextAsync(existingOutput) == "existing output",
+            "The existing output was changed.");
+        Assert(File.Exists(result.Files[0].OutputPath!), "The renamed output is missing.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ExistingOutputIsSkipped()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllTextAsync(acceptFile, "correct");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+
+        var outputDirectory = Path.Combine(directory, "out");
+        Directory.CreateDirectory(outputDirectory);
+        var existingOutput = Path.Combine(outputDirectory, "a1.pdf");
+        await File.WriteAllTextAsync(existingOutput, "existing output");
+        var input = Path.Combine(directory, "a1.pdf");
+        await File.WriteAllTextAsync(input, "input");
+
+        var service = new BulkDecryptService();
+        var result = await service.DecryptAsync(new BulkDecryptRequest(
+            Environment.ProcessPath!,
+            new[] { input },
+            new[] { "correct" },
+            outputDirectory,
+            ConflictPolicy.Skip));
+
+        Assert(result.Files[0].Outcome == FileOutcome.Skipped,
+            "An existing output was not reported as Skipped.");
+        Assert(await File.ReadAllTextAsync(existingOutput) == "existing output",
+            "The existing output was changed.");
+        Assert(Directory.GetFiles(outputDirectory, "*.pdf").Length == 1,
+            "An extra output was written.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
         Directory.Delete(directory, recursive: true);
     }
 }
