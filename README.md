@@ -30,6 +30,7 @@ Built on top of [QPDF](https://github.com/qpdf/qpdf), which handles the native C
 - **Zero Dependencies**: Standalone release — no .NET runtime installation required.
 - **Process-Level Password Security**: Passwords are passed directly to `qpdf` via `stdin`, keeping them out of Task Manager and process log arguments.
 - **Non-Destructive**: Generates a decrypted copy while leaving your original PDF intact.
+- **Bulk Folder Decryption**: Decrypt every PDF in a folder in one run — with one shared password, or a password list tried against each file until one works.
 
 ---
 
@@ -53,6 +54,14 @@ QPDF Decryptor runs entirely on your desktop:
 3. Drag & drop a PDF onto the window (or click **Choose PDF**).
 4. Enter the password if required (leave blank if stripping printing/copying restrictions).
 5. Click **Decrypt PDF**.
+
+### Decrypting a whole folder
+
+1. Switch to **A folder of files**.
+2. Choose the folder (optionally include subfolders).
+3. Pick **one password for all files**, or a **password list** (.txt, one password per line) that will be tried against each file until one opens it.
+4. Choose the output folder and what happens when a decrypted copy already exists: replace, rename, or skip.
+5. Click **Decrypt N PDFs**. Finished runs can be exported as a CSV report (passwords are never included).
 
 
 ---
