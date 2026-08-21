@@ -6,4 +6,8 @@ public sealed record FileResult(
     FileOutcome Outcome,
     string? MatchedPassword,
     string Message,
-    string Details);
+    string Details)
+{
+    public override string ToString() =>
+        $"{nameof(FileResult)} {{ {nameof(InputPath)} = {InputPath}, {nameof(OutputPath)} = {OutputPath ?? "<null>"}, {nameof(Outcome)} = {Outcome}, {nameof(MatchedPassword)} = {(MatchedPassword is null ? "<null>" : "***")}, {nameof(Message)} = {Message}, {nameof(Details)} = {Details} }}";
+}
