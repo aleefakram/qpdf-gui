@@ -246,6 +246,16 @@ public partial class MainWindow : Window
             return;
         }
 
+        try
+        {
+            Directory.CreateDirectory(OutputFolderInput.Text);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            ShowError("The output folder could not be created", exception.Message);
+            return;
+        }
+
         var candidates = SinglePasswordRadio.IsChecked == true
             ? new[] { GetPassword() }
             : passwordList;
@@ -362,7 +372,7 @@ public partial class MainWindow : Window
         var fileName = Path.GetFileName(value.CurrentFile);
         return value.Phase switch
         {
-            BulkPhase.ProbingPasswords when value.AttemptCount > 1 =>
+            BulkPhase.ProbingPasswords when value.AttemptCount > 1 && value.Attempt > 0 =>
                 $"Trying password {value.Attempt} of {value.AttemptCount}... {fileName}",
             BulkPhase.ProbingPasswords => $"Checking {fileName}...",
             BulkPhase.Decrypting when value.DecryptPercent is int percent && percent > 0 =>
@@ -432,7 +442,19 @@ public partial class MainWindow : Window
             CsvField(file.Outcome.ToString()),
             CsvField(file.OutputPath ?? string.Empty),
             CsvField(file.Message))));
-        File.WriteAllLines(dialog.FileName, lines);
+        try
+        {
+            File.WriteAllLines(dialog.FileName, lines);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                this,
+                "The report could not be saved. Close it if it is open, then try again.",
+                "Could not export the report",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
     }
 
     private static string CsvField(string value) =>
@@ -492,6 +514,8 @@ public partial class MainWindow : Window
         InputFilePath.Text = singleMode
             ? "or choose a file from this computer"
             : "or choose a folder from this computer";
+        lastBulkResults = [];
+        ResultsRegion.Visibility = Visibility.Collapsed;
         ClearStatus();
         UpdateDecryptButtonState();
     }
@@ -506,6 +530,8 @@ public partial class MainWindow : Window
         var singleMode = SinglePasswordRadio.IsChecked == true;
         SinglePasswordSection.Visibility = singleMode ? Visibility.Visible : Visibility.Collapsed;
         ListPasswordSection.Visibility = singleMode ? Visibility.Collapsed : Visibility.Visible;
+        lastBulkResults = [];
+        ResultsRegion.Visibility = Visibility.Collapsed;
         ClearStatus();
         UpdateDecryptButtonState();
     }
