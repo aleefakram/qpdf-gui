@@ -83,6 +83,8 @@ internal static class QpdfProcessRunner
             }
 
             await process.WaitForExitAsync(cancellationToken);
+            // The parameterless WaitForExit drains the async output readers before we read the captured text.
+            process.WaitForExit();
             return new ProcessRunResult(process.ExitCode, output.ToString(), error.ToString());
         }
         catch (OperationCanceledException)

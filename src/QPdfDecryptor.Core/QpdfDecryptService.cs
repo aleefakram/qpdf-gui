@@ -24,6 +24,11 @@ public sealed partial class QpdfDecryptService
                 progress is null ? null : line => CaptureLine(line, progress),
                 cancellationToken);
 
+            if (run.ExitCode < 0)
+            {
+                return DecryptResult.Failure("qpdf could not process this file.", run.Error);
+            }
+
             var details = JoinDetails(run.Output, run.Error);
             var hasWarnings = run.ExitCode == 3;
             if ((run.ExitCode == 0 || hasWarnings) && File.Exists(temporaryOutputPath))
