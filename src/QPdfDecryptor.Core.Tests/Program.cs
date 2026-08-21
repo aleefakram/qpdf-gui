@@ -17,7 +17,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Probe reports a correct password", ProbeReportsCorrectPassword),
     ("Probe reports a wrong password", ProbeReportsWrongPassword),
     ("Probe reports an unencrypted file", ProbeReportsUnencryptedFile),
-    ("Probe reports an unreadable file as an error", ProbeReportsUnreadableFileAsError)
+    ("Probe reports an unreadable file as an error", ProbeReportsUnreadableFileAsError),
+    ("Password list parser handles BOM, line endings, blanks, and duplicates", ParserHandlesRealWorldLists)
 };
 
 var failures = 0;
@@ -286,6 +287,27 @@ static async Task ProbeReportsUnreadableFileAsError()
         string.Empty,
         CancellationToken.None);
     Assert(result.Outcome == ProbeOutcome.Error, $"Expected Error, got {result.Outcome}.");
+}
+
+static async Task ParserHandlesRealWorldLists()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var path = Path.Combine(directory, "passwords.txt");
+        await File.WriteAllTextAsync(path, "\uFEFFfirst\r\n\r\nsecond\nsecond\r\n  spaced  \r");
+
+        var passwords = PasswordListParser.Parse(path);
+
+        Assert(passwords.Count == 3, $"Expected 3 unique passwords, got {passwords.Count}.");
+        Assert(passwords[0] == "first", "The BOM was not stripped from the first password.");
+        Assert(passwords[1] == "second", "Duplicate passwords were not removed.");
+        Assert(passwords[2] == "  spaced  ", "Significant spaces were trimmed from a password.");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
 }
 
 static string? FindRealQpdf()
