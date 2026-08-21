@@ -264,7 +264,8 @@ public partial class MainWindow : Window
             folderFiles,
             candidates,
             OutputFolderInput.Text,
-            SelectedConflictPolicy());
+            SelectedConflictPolicy(),
+            FolderPathInput.Text);
         var openFolderWhenFinished = OpenFolderCheckBox.IsChecked == true;
 
         SetBusy(true);

@@ -33,7 +33,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Owner-restricted file decrypts without a password", OwnerOnlyFileDecryptsWithoutPassword),
     ("Existing output is renamed when policy is AutoRename", ExistingOutputIsRenamed),
     ("Existing output is skipped when policy is Skip", ExistingOutputIsSkipped),
-    ("Cancelling keeps finished outputs and leaves no temporary files", BulkCancellationKeepsFinishedOutputs)
+    ("Cancelling keeps finished outputs and leaves no temporary files", BulkCancellationKeepsFinishedOutputs),
+    ("Recursive inputs preserve relative subpaths", RecursiveInputsPreserveRelativeSubpaths)
 };
 
 var failures = 0;
@@ -572,6 +573,47 @@ static async Task BulkCancellationKeepsFinishedOutputs()
             "The cancelled file produced an output.");
         Assert(!Directory.EnumerateFiles(outputDirectory, ".*.tmp").Any(),
             "A temporary output was left behind.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task RecursiveInputsPreserveRelativeSubpaths()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllTextAsync(acceptFile, "correct");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+
+        var outputDirectory = Path.Combine(directory, "out");
+        Directory.CreateDirectory(outputDirectory);
+        var root = Path.Combine(directory, "src");
+        Directory.CreateDirectory(Path.Combine(root, "a"));
+        Directory.CreateDirectory(Path.Combine(root, "b"));
+        var first = Path.Combine(root, "a", "same.pdf");
+        var second = Path.Combine(root, "b", "same.pdf");
+        await File.WriteAllTextAsync(first, "input");
+        await File.WriteAllTextAsync(second, "input");
+
+        var service = new BulkDecryptService();
+        var result = await service.DecryptAsync(new BulkDecryptRequest(
+            Environment.ProcessPath!,
+            new[] { first, second },
+            new[] { "correct" },
+            outputDirectory,
+            ConflictPolicy.Overwrite,
+            root));
+
+        Assert(result.Files.All(file => file.Outcome == FileOutcome.Decrypted),
+            "Not every recursive file was decrypted.");
+        Assert(File.Exists(Path.Combine(outputDirectory, "a", "same.pdf")) &&
+               File.Exists(Path.Combine(outputDirectory, "b", "same.pdf")),
+            "Recursive outputs were not preserved under relative subpaths.");
     }
     finally
     {

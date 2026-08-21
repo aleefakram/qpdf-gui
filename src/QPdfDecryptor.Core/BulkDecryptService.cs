@@ -145,7 +145,8 @@ public sealed class BulkDecryptService
             completedFiles, totalFiles, inputPath, phase,
             attempt, attemptCount, 0));
 
-        var outputPath = ResolveOutputPath(inputPath, request.OutputDirectory, request.ConflictPolicy);
+        var outputPath = ResolveOutputPath(
+            inputPath, request.OutputDirectory, request.ConflictPolicy, request.InputRoot);
         if (outputPath is null)
         {
             return new FileResult(
@@ -160,6 +161,8 @@ public sealed class BulkDecryptService
                 "The decrypted copy would replace the original file. Choose a different output folder.",
                 string.Empty);
         }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
 
         var decryptProgress = progress is null
             ? null
@@ -195,9 +198,14 @@ public sealed class BulkDecryptService
         QpdfDecryptService.FriendlyError(probe.Error),
         probe.Error);
 
-    private static string? ResolveOutputPath(string inputPath, string outputDirectory, ConflictPolicy policy)
+    private static string? ResolveOutputPath(
+        string inputPath,
+        string outputDirectory,
+        ConflictPolicy policy,
+        string? inputRoot)
     {
-        var outputPath = Path.Combine(outputDirectory, Path.GetFileName(inputPath));
+        var outputPath = Path.Combine(
+            outputDirectory, GetOutputRelativePath(inputPath, inputRoot));
         if (!File.Exists(outputPath) || policy == ConflictPolicy.Overwrite)
         {
             return outputPath;
@@ -208,15 +216,35 @@ public sealed class BulkDecryptService
             return null;
         }
 
+        var targetDirectory = Path.GetDirectoryName(outputPath)!;
         var stem = Path.GetFileNameWithoutExtension(inputPath);
+        var extension = Path.GetExtension(inputPath);
         for (var suffix = 2; ; suffix++)
         {
-            var candidate = Path.Combine(outputDirectory, $"{stem} ({suffix}).pdf");
+            var candidate = Path.Combine(targetDirectory, $"{stem} ({suffix}){extension}");
             if (!File.Exists(candidate))
             {
                 return candidate;
             }
         }
+    }
+
+    private static string GetOutputRelativePath(string inputPath, string? inputRoot)
+    {
+        if (string.IsNullOrWhiteSpace(inputRoot))
+        {
+            return Path.GetFileName(inputPath);
+        }
+
+        var fullRoot = Path.GetFullPath(inputRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullInput = Path.GetFullPath(inputPath);
+        if (!fullInput.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.GetFileName(inputPath);
+        }
+
+        return fullInput[(fullRoot.Length + 1)..];
     }
 
     private static bool PathsEqual(string left, string right) =>

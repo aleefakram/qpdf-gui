@@ -5,4 +5,5 @@ public sealed record BulkDecryptRequest(
     IReadOnlyList<string> InputPaths,
     IReadOnlyList<string> PasswordCandidates,
     string OutputDirectory,
-    ConflictPolicy ConflictPolicy);
+    ConflictPolicy ConflictPolicy,
+    string? InputRoot = null);
