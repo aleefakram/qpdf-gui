@@ -89,6 +89,13 @@ internal static class QpdfProcessRunner
         }
         catch (OperationCanceledException)
         {
+            // The kill registration has already fired; wait so handles (e.g. the temp
+            // output file) are released before the caller's cleanup runs.
+            if (!process.HasExited)
+            {
+                process.WaitForExit();
+            }
+
             throw;
         }
         catch (Exception exception) when (
