@@ -101,11 +101,18 @@ public sealed class BulkDecryptService
             }
 
             var password = candidates[attempt];
-            return await DecryptToOutputAsync(
+            var result = await DecryptToOutputAsync(
                 request, inputPath, password, FileOutcome.Decrypted,
                 "The password was found and the PDF was decrypted.",
                 BulkPhase.Decrypting,
                 progress, completedFiles, attempt + 1, candidates.Count, cancellationToken);
+            if (result.Outcome == FileOutcome.Decrypted)
+            {
+                candidates.RemoveAt(attempt);
+                candidates.Insert(0, password);
+            }
+
+            return result;
         }
 
         var tried = candidates.Count;

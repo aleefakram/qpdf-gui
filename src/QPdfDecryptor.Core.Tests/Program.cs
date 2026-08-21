@@ -28,7 +28,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Each file finds its own password", EachFileFindsItsOwnPassword),
     ("Exhausted list reports no match and writes nothing", ExhaustedListReportsNoMatch),
     ("Unencrypted file is copied to the output folder", UnencryptedFileIsCopied),
-    ("Corrupt file fails without stopping the batch", CorruptFileFailsWithoutStoppingBatch)
+    ("Corrupt file fails without stopping the batch", CorruptFileFailsWithoutStoppingBatch),
+    ("Winning password is tried first for the next file", WinningPasswordIsTriedFirstForNextFile),
+    ("Owner-restricted file decrypts without a password", OwnerOnlyFileDecryptsWithoutPassword)
 };
 
 var failures = 0;
@@ -363,6 +365,88 @@ static async Task CorruptFileFailsWithoutStoppingBatch()
     finally
     {
         Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task OwnerOnlyFileDecryptsWithoutPassword()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllTextAsync(acceptFile, "\n");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+
+        var outputDirectory = Path.Combine(directory, "out");
+        Directory.CreateDirectory(outputDirectory);
+        var input = Path.Combine(directory, "restricted.pdf");
+        await File.WriteAllTextAsync(input, "input");
+
+        var service = new BulkDecryptService();
+        var result = await service.DecryptAsync(new BulkDecryptRequest(
+            Environment.ProcessPath!,
+            new[] { input },
+            new[] { "alpha" },
+            outputDirectory,
+            ConflictPolicy.Overwrite));
+
+        Assert(result.Files[0].Outcome == FileOutcome.DecryptedNoPassword,
+            "An owner-restricted file was not reported as DecryptedNoPassword.");
+        Assert(result.Files[0].MatchedPassword is null,
+            "A matched password was reported for a file that needed none.");
+        Assert(File.Exists(Path.Combine(outputDirectory, "restricted.pdf")),
+            "No output was written for the restricted file.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task WinningPasswordIsTriedFirstForNextFile()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllLinesAsync(acceptFile, new[] { "beta" });
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+        var logFile = Path.Combine(directory, "probes.log");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_LOG", logFile);
+
+        var outputDirectory = Path.Combine(directory, "out");
+        Directory.CreateDirectory(outputDirectory);
+        var inputs = new[]
+        {
+            Path.Combine(directory, "a1.pdf"),
+            Path.Combine(directory, "a2.pdf")
+        };
+        foreach (var input in inputs)
+        {
+            await File.WriteAllTextAsync(input, "input");
+        }
+
+        var service = new BulkDecryptService();
+        var result = await service.DecryptAsync(new BulkDecryptRequest(
+            Environment.ProcessPath!,
+            inputs,
+            new[] { "alpha", "beta" },
+            outputDirectory,
+            ConflictPolicy.Overwrite));
+
+        Assert(result.Files.All(file => file.Outcome == FileOutcome.Decrypted),
+            "Not every file was decrypted.");
+
+        var attempts = await File.ReadAllLinesAsync(logFile);
+        Assert(string.Join("|", attempts) == "|alpha|beta||beta",
+            $"The winning password was not tried first for the second file: {string.Join("|", attempts)}");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Environment.SetEnvironmentVariable("FAKE_QPDF_LOG", null);
         Directory.Delete(directory, recursive: true);
     }
 }
