@@ -32,7 +32,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Winning password is tried first for the next file", WinningPasswordIsTriedFirstForNextFile),
     ("Owner-restricted file decrypts without a password", OwnerOnlyFileDecryptsWithoutPassword),
     ("Existing output is renamed when policy is AutoRename", ExistingOutputIsRenamed),
-    ("Existing output is skipped when policy is Skip", ExistingOutputIsSkipped)
+    ("Existing output is skipped when policy is Skip", ExistingOutputIsSkipped),
+    ("Cancelling keeps finished outputs and leaves no temporary files", BulkCancellationKeepsFinishedOutputs)
 };
 
 var failures = 0;
@@ -521,6 +522,56 @@ static async Task ExistingOutputIsSkipped()
             "The existing output was changed.");
         Assert(Directory.GetFiles(outputDirectory, "*.pdf").Length == 1,
             "An extra output was written.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task BulkCancellationKeepsFinishedOutputs()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllTextAsync(acceptFile, "correct");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+
+        var outputDirectory = Path.Combine(directory, "out");
+        Directory.CreateDirectory(outputDirectory);
+        var first = Path.Combine(directory, "b1.pdf");
+        var second = Path.Combine(directory, "wait-for-cancellation-b2.pdf");
+        await File.WriteAllTextAsync(first, "input");
+        await File.WriteAllTextAsync(second, "input");
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var progress = new CallbackProgress<BulkProgress>(value =>
+        {
+            if (value.DecryptPercent == 1)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        var service = new BulkDecryptService();
+        await AssertThrows<OperationCanceledException>(() => service.DecryptAsync(
+            new BulkDecryptRequest(
+                Environment.ProcessPath!,
+                new[] { first, second },
+                new[] { "correct" },
+                outputDirectory,
+                ConflictPolicy.Overwrite),
+            progress,
+            cancellation.Token));
+
+        Assert(File.Exists(Path.Combine(outputDirectory, "b1.pdf")),
+            "The finished file's output was not kept.");
+        Assert(!File.Exists(Path.Combine(outputDirectory, "wait-for-cancellation-b2.pdf")),
+            "The cancelled file produced an output.");
+        Assert(!Directory.EnumerateFiles(outputDirectory, ".*.tmp").Any(),
+            "A temporary output was left behind.");
     }
     finally
     {
