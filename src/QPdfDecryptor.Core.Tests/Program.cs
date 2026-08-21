@@ -1,6 +1,11 @@
 using System.Diagnostics;
 using QPdfDecryptor.Core;
 
+if (args.Contains("--requires-password", StringComparer.Ordinal))
+{
+    return await RunFakeQpdfProbe(args);
+}
+
 if (args.Contains("--password-file=-", StringComparer.Ordinal))
 {
     return await RunFakeQpdf(args);
@@ -165,13 +170,62 @@ static async Task<int> RunFakeQpdf(string[] arguments)
         await Task.Delay(Timeout.InfiniteTimeSpan);
     }
 
-    if (password != "correct")
+    if (!IsAcceptedDecryptPassword(password, input))
     {
         await Console.Error.WriteLineAsync("qpdf: invalid password");
         return 2;
     }
 
     return 0;
+}
+
+static async Task<int> RunFakeQpdfProbe(string[] arguments)
+{
+    var password = await Console.In.ReadLineAsync() ?? string.Empty;
+    var input = arguments[^1];
+    await LogProbeAttempt(password);
+
+    if (Path.GetFileName(input).StartsWith("open-", StringComparison.Ordinal))
+    {
+        return 2;
+    }
+
+    if (Path.GetFileName(input).StartsWith("corrupt-", StringComparison.Ordinal))
+    {
+        await Console.Error.WriteLineAsync("qpdf: can't find PDF header");
+        return 2;
+    }
+
+    return IsAcceptedPassword(password, input) ? 3 : 0;
+}
+
+static bool IsAcceptedPassword(string password, string input)
+{
+    var acceptDirectory = Environment.GetEnvironmentVariable("FAKE_QPDF_ACCEPT_DIR");
+    if (acceptDirectory is not null)
+    {
+        var perFile = Path.Combine(acceptDirectory, Path.GetFileName(input) + ".passwords.txt");
+        return File.Exists(perFile) &&
+               File.ReadAllLines(perFile).Contains(password, StringComparer.Ordinal);
+    }
+
+    var acceptFile = Environment.GetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE");
+    return acceptFile is not null && File.Exists(acceptFile) &&
+           File.ReadAllLines(acceptFile).Contains(password, StringComparer.Ordinal);
+}
+
+static bool IsAcceptedDecryptPassword(string password, string input) =>
+    password == "correct" ||
+    password.Length == 0 ||
+    IsAcceptedPassword(password, input);
+
+static async Task LogProbeAttempt(string password)
+{
+    var logFile = Environment.GetEnvironmentVariable("FAKE_QPDF_LOG");
+    if (logFile is not null)
+    {
+        await File.AppendAllTextAsync(logFile, password + Environment.NewLine);
+    }
 }
 
 static string CreateTestDirectory()
