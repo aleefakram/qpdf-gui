@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using QPdfDecryptor.Core;
 
 if (args.Contains("--password-file=-", StringComparer.Ordinal))
@@ -12,7 +13,11 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Line breaks in passwords are rejected", RejectsPasswordLineBreak),
     ("Existing output survives process startup failure", ExistingOutputSurvivesStartupFailure),
     ("Wrong password preserves output and returns a useful error", WrongPasswordPreservesOutput),
-    ("Cancellation preserves output and removes partial files", CancellationPreservesOutput)
+    ("Cancellation preserves output and removes partial files", CancellationPreservesOutput),
+    ("Probe reports a correct password", ProbeReportsCorrectPassword),
+    ("Probe reports a wrong password", ProbeReportsWrongPassword),
+    ("Probe reports an unencrypted file", ProbeReportsUnencryptedFile),
+    ("Probe reports an unreadable file as an error", ProbeReportsUnreadableFileAsError)
 };
 
 var failures = 0;
@@ -193,6 +198,148 @@ static void Assert(bool condition, string message)
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+static async Task ProbeReportsCorrectPassword()
+{
+    var qpdf = FindRealQpdf();
+    if (qpdf is null)
+    {
+        Console.WriteLine("SKIP ProbeReportsCorrectPassword (no qpdf.exe found)");
+        return;
+    }
+
+    var directory = CreateTestDirectory();
+    try
+    {
+        var encrypted = CreateEncryptedSample(qpdf, directory, "probe-secret");
+        var result = await QpdfPasswordProbe.ProbeAsync(
+            qpdf, encrypted, "probe-secret", CancellationToken.None);
+        Assert(result.Outcome == ProbeOutcome.Correct, $"Expected Correct, got {result.Outcome}.");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ProbeReportsWrongPassword()
+{
+    var qpdf = FindRealQpdf();
+    if (qpdf is null)
+    {
+        Console.WriteLine("SKIP ProbeReportsWrongPassword (no qpdf.exe found)");
+        return;
+    }
+
+    var directory = CreateTestDirectory();
+    try
+    {
+        var encrypted = CreateEncryptedSample(qpdf, directory, "probe-secret");
+        var result = await QpdfPasswordProbe.ProbeAsync(
+            qpdf, encrypted, "not-the-password", CancellationToken.None);
+        Assert(result.Outcome == ProbeOutcome.Wrong, $"Expected Wrong, got {result.Outcome}.");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ProbeReportsUnencryptedFile()
+{
+    var qpdf = FindRealQpdf();
+    if (qpdf is null)
+    {
+        Console.WriteLine("SKIP ProbeReportsUnencryptedFile (no qpdf.exe found)");
+        return;
+    }
+
+    var directory = CreateTestDirectory();
+    try
+    {
+        var plain = Path.Combine(directory, "plain.pdf");
+        RunQpdf(qpdf, "--empty", plain);
+        var result = await QpdfPasswordProbe.ProbeAsync(
+            qpdf, plain, string.Empty, CancellationToken.None);
+        Assert(result.Outcome == ProbeOutcome.NotEncrypted, $"Expected NotEncrypted, got {result.Outcome}.");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ProbeReportsUnreadableFileAsError()
+{
+    var qpdf = FindRealQpdf();
+    if (qpdf is null)
+    {
+        Console.WriteLine("SKIP ProbeReportsUnreadableFileAsError (no qpdf.exe found)");
+        return;
+    }
+
+    var result = await QpdfPasswordProbe.ProbeAsync(
+        qpdf,
+        Path.Combine(AppContext.BaseDirectory, "missing-file.pdf"),
+        string.Empty,
+        CancellationToken.None);
+    Assert(result.Outcome == ProbeOutcome.Error, $"Expected Error, got {result.Outcome}.");
+}
+
+static string? FindRealQpdf()
+{
+    var fromEnvironment = Environment.GetEnvironmentVariable("QPDF_EXECUTABLE");
+    if (!string.IsNullOrWhiteSpace(fromEnvironment) && File.Exists(fromEnvironment))
+    {
+        return fromEnvironment;
+    }
+
+    var current = new DirectoryInfo(AppContext.BaseDirectory);
+    while (current is not null)
+    {
+        var candidate = Path.Combine(current.FullName, "src", "QPdfDecryptor", "Native", "qpdf.exe");
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        current = current.Parent;
+    }
+
+    return null;
+}
+
+static string CreateEncryptedSample(string qpdf, string directory, string password)
+{
+    var plain = Path.Combine(directory, "plain.pdf");
+    var encrypted = Path.Combine(directory, "encrypted.pdf");
+    RunQpdf(qpdf, "--empty", plain);
+    RunQpdf(qpdf, "--encrypt", password, password, "256", "--", plain, encrypted);
+    return encrypted;
+}
+
+static void RunQpdf(string qpdf, params string[] arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = qpdf,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    foreach (var argument in arguments)
+    {
+        startInfo.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(startInfo)
+        ?? throw new InvalidOperationException("qpdf could not be started.");
+    process.WaitForExit();
+    if (process.ExitCode != 0)
+    {
+        throw new InvalidOperationException(
+            $"qpdf {arguments[0]} failed with exit code {process.ExitCode}.");
     }
 }
 
