@@ -246,6 +246,32 @@ public partial class MainWindow : Window
             return;
         }
 
+        IReadOnlyList<string> candidates;
+        if (SinglePasswordRadio.IsChecked == true)
+        {
+            candidates = new[] { GetPassword() };
+        }
+        else
+        {
+            try
+            {
+                candidates = PasswordListParser.Parse(PasswordListPathInput.Text);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                ShowError("The password list could not be read", "Close it if it is open, then choose it again.");
+                ChoosePasswordListButton.Focus();
+                return;
+            }
+
+            if (candidates.Count == 0)
+            {
+                ShowError("Check the details", "The password list is empty. Enter one password per line.");
+                ChoosePasswordListButton.Focus();
+                return;
+            }
+        }
+
         try
         {
             Directory.CreateDirectory(OutputFolderInput.Text);
@@ -256,9 +282,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        var candidates = SinglePasswordRadio.IsChecked == true
-            ? new[] { GetPassword() }
-            : passwordList;
         var request = new BulkDecryptRequest(
             qpdfPath!,
             folderFiles,
