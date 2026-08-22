@@ -85,7 +85,8 @@ public sealed record BulkDecryptRequest(
     IReadOnlyList<string> InputPaths,
     IReadOnlyList<string> PasswordCandidates, // normalized: single mode == list of one
     string OutputDirectory,
-    ConflictPolicy ConflictPolicy);
+    ConflictPolicy ConflictPolicy,
+    string? InputRoot = null); // recursive mode: outputs preserve subpaths below this root
 
 public enum ConflictPolicy { Overwrite, AutoRename, Skip }
 
