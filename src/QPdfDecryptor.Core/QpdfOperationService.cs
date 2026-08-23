@@ -15,23 +15,23 @@ public static partial class QpdfOperationService
         CancellationToken cancellationToken = default,
         bool allowOverwrite = false)
     {
-        operation.Validate();
-
-        if (operation.ProbeInputPath.Length > 0)
-        {
-            var probe = await QpdfPasswordProbe.ProbeAsync(
-                operation.QpdfPath, operation.ProbeInputPath, string.Empty, cancellationToken);
-            if (probe.Outcome == ProbeOutcome.Wrong)
-            {
-                return new OperationOutcome(false, false, null,
-                    "This PDF is password-protected. Use Decrypt first.", probe.Error);
-            }
-        }
-
-        var temporaryOutputPath = CreateTemporaryOutputPath(operation.OutputPath);
-
         try
         {
+            operation.Validate();
+
+            if (operation.ProbeInputPath.Length > 0)
+            {
+                var probe = await QpdfPasswordProbe.ProbeAsync(
+                    operation.QpdfPath, operation.ProbeInputPath, string.Empty, cancellationToken);
+                if (probe.Outcome == ProbeOutcome.Wrong)
+                {
+                    return new OperationOutcome(false, false, null,
+                        "This PDF is password-protected. Use Decrypt first.", probe.Error);
+                }
+            }
+
+            var temporaryOutputPath = CreateTemporaryOutputPath(operation.OutputPath);
+
             var startInfo = QpdfProcessRunner.CreateStartInfo(operation.QpdfPath);
             foreach (var argument in operation.BuildArguments(temporaryOutputPath))
             {
@@ -55,6 +55,13 @@ public static partial class QpdfOperationService
         catch (OperationCanceledException)
         {
             throw;
+        }
+        // Validation failures carry user-appropriate messages; surface them as outcomes,
+        // never as exceptions — pages are async-void and must not crash the process.
+        catch (Exception exception) when (
+            exception is ArgumentException or ArgumentOutOfRangeException)
+        {
+            return new OperationOutcome(false, false, null, exception.Message, exception.Message);
         }
         catch (Exception exception) when (
             exception is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)

@@ -16,6 +16,8 @@ public partial class MergePage : UserControl, IBusyPage
 
     public bool IsBusy => viewModel.IsBusy;
 
+    public void OnShellClosing() => viewModel.RunCommand.Cancel();
+
     public MergePage()
     {
         InitializeComponent();

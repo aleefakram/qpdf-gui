@@ -73,7 +73,11 @@ public partial class OrganizeViewModel : ObservableObject, IBusyPage
             return false;
         }
 
-        return PageRanges.Trim().Length > 0 && !RangeKnownBad;
+        // Grammar gate works without a page count, so pasted junk stays disabled even
+        // when the lookup failed; the count-aware check adds bounds validation.
+        return PageRanges.Trim().Length > 0 &&
+               PageRangeParser.IsValid(PageRanges, int.MaxValue) &&
+               !RangeKnownBad;
     }
 
     [RelayCommand(CanExecute = nameof(CanRun))]

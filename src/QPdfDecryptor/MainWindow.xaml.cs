@@ -54,7 +54,7 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        (PageHost.Content as Operations.DecryptPage)?.OnShellClosing();
+        (PageHost.Content as Operations.IBusyPage)?.OnShellClosing();
     }
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)

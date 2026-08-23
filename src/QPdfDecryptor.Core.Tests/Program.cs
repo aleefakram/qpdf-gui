@@ -109,6 +109,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Executor moves split siblings onto target stems", ExecutorMovesSplitSiblingsOntoTargetStems),
     ("Executor reports warnings on exit code three", ExecutorReportsWarningsOnExitCodeThree),
     ("Encrypted input is refused with a decrypt-first message", EncryptedRefused),
+    ("Validation failure becomes a failed outcome, not an exception", ValidationFailureBecomesOutcome),
     ("Executor forwards write progress percentages", ExecutorForwardsWriteProgressPercentages)
 };
 
@@ -1226,6 +1227,20 @@ static async Task EncryptedRefused()
     finally
     {
         Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ValidationFailureBecomesOutcome()
+{
+    // En-dash range: grammar-invalid, and the page-count probe never ran — the executor
+    // must surface Validate()'s exception as a failed outcome (pages are async-void).
+    var outcome = await QpdfOperationService.RunAsync(
+        new OrganizeRequest(Environment.ProcessPath!, "in.txt", "1\u20133", "o.pdf"));
+
+    Assert(!outcome.Succeeded, "must fail");
+    if (!outcome.FriendlyError.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new Exception("unexpected message: " + outcome.FriendlyError);
     }
 }
 

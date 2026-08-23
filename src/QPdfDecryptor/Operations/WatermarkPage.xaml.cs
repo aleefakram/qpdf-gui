@@ -15,6 +15,8 @@ public partial class WatermarkPage : UserControl, IBusyPage
 
     public bool IsBusy => viewModel.IsBusy;
 
+    public void OnShellClosing() => viewModel.RunCommand.Cancel();
+
     public WatermarkPage()
     {
         InitializeComponent();

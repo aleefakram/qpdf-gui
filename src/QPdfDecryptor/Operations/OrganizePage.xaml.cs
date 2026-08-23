@@ -15,6 +15,8 @@ public partial class OrganizePage : UserControl, IBusyPage
 
     public bool IsBusy => viewModel.IsBusy;
 
+    public void OnShellClosing() => viewModel.RunCommand.Cancel();
+
     public OrganizePage()
     {
         InitializeComponent();

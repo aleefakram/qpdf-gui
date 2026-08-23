@@ -68,6 +68,12 @@ public partial class RotateViewModel : ObservableObject, IBusyPage
             return false;
         }
 
+        // Grammar gate works without a page count (see OrganizeViewModel).
+        if (PageRange.Trim().Length > 0 && !PageRangeParser.IsValid(PageRange, int.MaxValue))
+        {
+            return false;
+        }
+
         return !RangeKnownBad;
     }
 
