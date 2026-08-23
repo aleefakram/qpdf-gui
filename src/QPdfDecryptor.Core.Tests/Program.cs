@@ -48,6 +48,12 @@ if ((fakeExit != 0 && fakeExit != 3) || Environment.GetEnvironmentVariable("FAKE
 var written = args.LastOrDefault(a => !a.StartsWith('-'));
 if (written is not null)
 {
+    // Exit code 3 carries its warning text on stderr while still producing output.
+    if (fakeExit == 3)
+    {
+        Console.Error.WriteLine("WARNING: structural issues detected");
+    }
+
     var progressLine = Environment.GetEnvironmentVariable("FAKE_QPDF_PROGRESS");
     if (progressLine is not null)
     {
@@ -1151,6 +1157,7 @@ static async Task ExecutorReportsWarningsOnExitCodeThree()
                 new CompressRequest(Environment.ProcessPath!, input, false, output));
             Assert(outcome.Succeeded && outcome.HasWarnings,
                 $"Expected success with warnings, got {outcome.Succeeded}/{outcome.HasWarnings}.");
+            Assert(outcome.Details.Length > 0, "Expected the warning text to be captured in Details.");
             Assert(File.Exists(output), "The warning-path run did not produce its output.");
         }
         finally
