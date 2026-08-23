@@ -22,13 +22,8 @@ public partial class RunStatusControl : UserControl
     public void ShowSuccess(bool warnings, string title, string message, string details)
     {
         SetStatus(warnings ? "\uE7BA" : "\uE73E",
-                  (Brush)FindResource("WarningBrush"),
-                  warnings ? (Brush)FindResource("WarningSurfaceBrush") : (Brush)FindResource("SuccessSurfaceBrush"));
-        if (!warnings)
-        {
-            StatusIcon.Foreground = StatusTitle.Foreground = (Brush)FindResource("SuccessBrush");
-        }
-
+                  (Brush)FindResource(warnings ? "WarningBrush" : "SuccessBrush"),
+                  (Brush)FindResource(warnings ? "WarningSurfaceBrush" : "SuccessSurfaceBrush"));
         StatusTitle.Text = title;
         StatusMessage.Text = message;
         SetDetails(details);

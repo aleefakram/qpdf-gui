@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 
 namespace QPdfDecryptor.Controls;
 
@@ -8,7 +9,11 @@ public partial class OverwriteDialog : Window
 
     private Decision result = Decision.Dismissed;
 
-    public OverwriteDialog() => InitializeComponent();
+    public OverwriteDialog()
+    {
+        InitializeComponent();
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
+    }
 
     public static Decision Ask(Window owner, string targetPath)
     {
