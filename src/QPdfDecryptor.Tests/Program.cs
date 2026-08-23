@@ -129,10 +129,11 @@ public static class Program
         Assert(!vm.RunCommand.CanExecute(null), "starts disabled");
         vm.InputPath = "in.pdf"; vm.WatermarkPdfPath = "wm.pdf"; vm.OutputPath = "o.pdf";
         if (!vm.RunCommand.CanExecute(null)) throw new Exception("front placement default runnable");
-        var request = vm.CreateRequest(Operations.QpdfLocator.Path);
-        if (((string[])request.BuildArguments("t")).Contains("--underlay")) throw new Exception("default must be overlay");
+        var front = (string[])vm.CreateRequest(Operations.QpdfLocator.Path).BuildArguments("t");
+        if (!front.Contains("--overlay") || front.Contains("--underlay")) throw new Exception("default must be overlay");
         vm.BehindContent = true;
-        if (((string[])request.BuildArguments("t")).Contains("--overlay")) throw new Exception("toggle failed");
+        var behind = (string[])vm.CreateRequest(Operations.QpdfLocator.Path).BuildArguments("t");
+        if (!behind.Contains("--underlay") || behind.Contains("--overlay")) throw new Exception("toggle failed");
         return Task.CompletedTask;
     }
 

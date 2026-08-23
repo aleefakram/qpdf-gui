@@ -42,22 +42,8 @@ public partial class WatermarkViewModel : ObservableObject, IBusyPage
 
     public event EventHandler? BusyStateChanged;
 
-    private WatermarkRequest? currentRequest;
-
-    public WatermarkRequest CreateRequest(string qpdfPath)
-    {
-        var request = new WatermarkRequest(qpdfPath, InputPath, WatermarkPdfPath, BehindContent, OutputPath);
-        currentRequest = request;
-        return request;
-    }
-
-    partial void OnBehindContentChanged(bool value)
-    {
-        if (currentRequest is { } request)
-        {
-            request.BehindContent = value;
-        }
-    }
+    public WatermarkRequest CreateRequest(string qpdfPath) =>
+        new(qpdfPath, InputPath, WatermarkPdfPath, BehindContent, OutputPath);
 
     private bool CanRun() =>
         !IsBusy && InputPath.Trim().Length > 0 && WatermarkPdfPath.Trim().Length > 0 &&
