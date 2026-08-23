@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace QPdfDecryptor.Core;
@@ -16,50 +15,23 @@ public sealed partial class QpdfDecryptService
         var temporaryOutputPath = CreateTemporaryOutputPath(request.OutputPath);
         var processRequest = request with { OutputPath = temporaryOutputPath };
         var startInfo = CreateStartInfo(processRequest);
-        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        var output = new StringBuilder();
-        var error = new StringBuilder();
-
-        process.OutputDataReceived += (_, eventArgs) =>
-            CaptureLine(eventArgs.Data, output, progress);
-        process.ErrorDataReceived += (_, eventArgs) =>
-            CaptureLine(eventArgs.Data, error, progress);
 
         try
         {
-            if (!process.Start())
+            var run = await QpdfProcessRunner.RunAsync(
+                startInfo,
+                request.Password,
+                progress is null ? null : line => CaptureLine(line, progress),
+                cancellationToken);
+
+            if (run.ExitCode < 0)
             {
-                return DecryptResult.Failure("qpdf could not be started.", string.Empty);
+                return DecryptResult.Failure("qpdf could not process this file.", run.Error);
             }
 
-            using var registration = cancellationToken.Register(() =>
-            {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (Exception exception) when (
-                    exception is InvalidOperationException or System.ComponentModel.Win32Exception)
-                {
-                    // The process completed between the check and Kill.
-                }
-            });
-
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            // Standard input keeps the password out of process arguments and temporary files.
-            await process.StandardInput.WriteLineAsync(request.Password.AsMemory(), cancellationToken);
-            process.StandardInput.Close();
-
-            await process.WaitForExitAsync(cancellationToken);
-
-            var details = JoinDetails(output, error);
-            var hasWarnings = process.ExitCode == 3;
-            if ((process.ExitCode == 0 || hasWarnings) && File.Exists(temporaryOutputPath))
+            var details = JoinDetails(run.Output, run.Error);
+            var hasWarnings = run.ExitCode == 3;
+            if ((run.ExitCode == 0 || hasWarnings) && File.Exists(temporaryOutputPath))
             {
                 try
                 {
@@ -79,15 +51,6 @@ public sealed partial class QpdfDecryptService
         {
             throw;
         }
-        catch (Exception exception) when (
-            exception is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
-        {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                throw new OperationCanceledException(cancellationToken);
-            }
-            return DecryptResult.Failure("qpdf could not process this file.", exception.Message);
-        }
         finally
         {
             TryDeleteTemporaryOutput(temporaryOutputPath);
@@ -96,19 +59,7 @@ public sealed partial class QpdfDecryptService
 
     internal static ProcessStartInfo CreateStartInfo(DecryptRequest request)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = request.QpdfPath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-
+        var startInfo = QpdfProcessRunner.CreateStartInfo(request.QpdfPath);
         startInfo.ArgumentList.Add("--password-file=-");
         startInfo.ArgumentList.Add("--decrypt");
         startInfo.ArgumentList.Add("--progress");
@@ -117,41 +68,7 @@ public sealed partial class QpdfDecryptService
         return startInfo;
     }
 
-    private static void Validate(DecryptRequest request)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.QpdfPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.InputPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputPath);
-
-        if (request.Password.Contains('\r') || request.Password.Contains('\n'))
-        {
-            throw new ArgumentException("Passwords cannot contain a line break.", nameof(request));
-        }
-
-        if (Path.GetFullPath(request.InputPath).Equals(
-                Path.GetFullPath(request.OutputPath),
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("The output must be a different file from the input.", nameof(request));
-        }
-    }
-
-    private static void CaptureLine(string? line, StringBuilder destination, IProgress<int>? progress)
-    {
-        if (string.IsNullOrWhiteSpace(line))
-        {
-            return;
-        }
-
-        destination.AppendLine(line);
-        var match = ProgressPattern().Match(line);
-        if (match.Success && int.TryParse(match.Groups[1].Value, out var value))
-        {
-            progress?.Report(Math.Clamp(value, 0, 100));
-        }
-    }
-
-    private static string FriendlyError(string details)
+    internal static string FriendlyError(string details)
     {
         if (details.Contains("invalid password", StringComparison.OrdinalIgnoreCase) ||
             details.Contains("password is incorrect", StringComparison.OrdinalIgnoreCase))
@@ -174,8 +91,41 @@ public sealed partial class QpdfDecryptService
         return "The PDF could not be decrypted. Check the password and file, then try again.";
     }
 
-    private static string JoinDetails(StringBuilder output, StringBuilder error) =>
-        string.Join(Environment.NewLine, new[] { error.ToString().Trim(), output.ToString().Trim() }
+    private static void Validate(DecryptRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.QpdfPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.InputPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputPath);
+
+        if (request.Password.Contains('\r') || request.Password.Contains('\n'))
+        {
+            throw new ArgumentException("Passwords cannot contain a line break.", nameof(request));
+        }
+
+        if (Path.GetFullPath(request.InputPath).Equals(
+                Path.GetFullPath(request.OutputPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The output must be a different file from the input.", nameof(request));
+        }
+    }
+
+    private static void CaptureLine(string? line, IProgress<int>? progress)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
+        var match = ProgressPattern().Match(line);
+        if (match.Success && int.TryParse(match.Groups[1].Value, out var value))
+        {
+            progress?.Report(Math.Clamp(value, 0, 100));
+        }
+    }
+
+    private static string JoinDetails(string output, string error) =>
+        string.Join(Environment.NewLine, new[] { error.Trim(), output.Trim() }
             .Where(value => value.Length > 0));
 
     private static string CreateTemporaryOutputPath(string outputPath)
