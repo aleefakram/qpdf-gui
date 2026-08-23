@@ -13,6 +13,7 @@ public static class Program
             ("Catalog groups are Secure Arrange Enhance", CatalogGroupsAreStable),
             ("Merge command gated on at least one file and output path", MergeGating),
             ("Merge run delegate produces outcome and toggles busy", MergeRunLifecycle),
+            ("Split gating requires input, positive pages-per-file, folder and stem", SplitGating),
         };
 
         foreach (var test in tests)
@@ -63,6 +64,20 @@ public static class Program
         await vm.RunCommand.ExecuteAsync(null);
         Assert(vm.Outcome == received, "outcome surfaced");
         Assert(!vm.IsBusy, "busy cleared after run");
+    }
+
+    private static Task SplitGating()
+    {
+        var vm = new Operations.SplitViewModel();
+        Assert(!vm.RunCommand.CanExecute(null), "starts disabled");
+        vm.InputPath = "C:\\tmp\\in.pdf";
+        vm.PagesPerFile = 2;
+        vm.OutputFolder = "C:\\tmp";
+        vm.OutputStem = "scan";
+        Assert(vm.RunCommand.CanExecute(null), "runnable after fill");
+        vm.PagesPerFile = 0;
+        Assert(!vm.RunCommand.CanExecute(null), "zero pages-per-file disables");
+        return Task.CompletedTask;
     }
 
     private static void Assert(bool condition, string message)
