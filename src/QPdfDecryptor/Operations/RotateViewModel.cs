@@ -97,6 +97,8 @@ public partial class RotateViewModel : ObservableObject, IBusyPage
 
     partial void OnIsBusyChanged(bool value) => BusyStateChanged?.Invoke(this, EventArgs.Empty);
 
+    public void OnShellClosing() => RunCommand.Cancel();
+
     partial void OnPageRangeChanged(string value) => OnPropertyChanged(nameof(RangeError));
 
     partial void OnKnownPageCountChanged(int? value) => OnPropertyChanged(nameof(RangeError));

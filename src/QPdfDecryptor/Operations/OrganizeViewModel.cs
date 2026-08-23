@@ -100,6 +100,8 @@ public partial class OrganizeViewModel : ObservableObject, IBusyPage
 
     partial void OnIsBusyChanged(bool value) => BusyStateChanged?.Invoke(this, EventArgs.Empty);
 
+    public void OnShellClosing() => RunCommand.Cancel();
+
     partial void OnPageRangesChanged(string value) => OnPropertyChanged(nameof(RangeError));
 
     partial void OnKnownPageCountChanged(int? value) => OnPropertyChanged(nameof(RangeError));

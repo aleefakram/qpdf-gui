@@ -62,6 +62,8 @@ public partial class MergeViewModel : ObservableObject, IBusyPage
 
     partial void OnIsBusyChanged(bool value) => BusyStateChanged?.Invoke(this, EventArgs.Empty);
 
+    public void OnShellClosing() => RunCommand.Cancel();
+
     private void OnInputPathsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
         RunCommand.NotifyCanExecuteChanged();
 }

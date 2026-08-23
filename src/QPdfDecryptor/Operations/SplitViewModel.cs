@@ -72,4 +72,6 @@ public partial class SplitViewModel : ObservableObject, IBusyPage
     }
 
     partial void OnIsBusyChanged(bool value) => BusyStateChanged?.Invoke(this, EventArgs.Empty);
+
+    public void OnShellClosing() => RunCommand.Cancel();
 }

@@ -15,6 +15,8 @@ public static partial class QpdfOperationService
         CancellationToken cancellationToken = default,
         bool allowOverwrite = false)
     {
+        string? temporaryOutputPath = null;
+
         try
         {
             operation.Validate();
@@ -30,7 +32,7 @@ public static partial class QpdfOperationService
                 }
             }
 
-            var temporaryOutputPath = CreateTemporaryOutputPath(operation.OutputPath);
+            temporaryOutputPath = CreateTemporaryOutputPath(operation.OutputPath);
 
             var startInfo = QpdfProcessRunner.CreateStartInfo(operation.QpdfPath);
             foreach (var argument in operation.BuildArguments(temporaryOutputPath))
@@ -75,7 +77,10 @@ public static partial class QpdfOperationService
         }
         finally
         {
-            TryDeleteTempOutputs(temporaryOutputPath);
+            if (temporaryOutputPath is not null)
+            {
+                TryDeleteTempOutputs(temporaryOutputPath);
+            }
         }
 
         static void ReportProgress(string line, IProgress<int>? sink)
