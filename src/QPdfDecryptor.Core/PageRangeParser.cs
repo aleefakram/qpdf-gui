@@ -6,12 +6,38 @@ public static class PageRangeParser
     // page numbers. Returns null when anything fails to parse or exceeds pageCount.
     public static List<int>? Parse(string? text, int pageCount)
     {
-        if (string.IsNullOrWhiteSpace(text) || pageCount < 1)
+        var ranges = ResolveRanges(text, pageCount);
+        if (ranges is null)
         {
             return null;
         }
 
         var pages = new List<int>();
+        foreach (var (start, end) in ranges)
+        {
+            var step = start <= end ? 1 : -1;
+            for (var page = start; page != end + step; page += step)
+            {
+                pages.Add(page);
+            }
+        }
+
+        return pages;
+    }
+
+    // Grammar check without expansion: true when Parse(text, pageCount) would succeed.
+    // Safe for huge counts ("1-z" against int.MaxValue) because only bounds are resolved.
+    public static bool IsValid(string? text, int pageCount) =>
+        ResolveRanges(text, pageCount) is not null;
+
+    private static List<(int Start, int End)>? ResolveRanges(string? text, int pageCount)
+    {
+        if (string.IsNullOrWhiteSpace(text) || pageCount < 1)
+        {
+            return null;
+        }
+
+        var ranges = new List<(int Start, int End)>();
         foreach (var rawToken in text.Split(','))
         {
             var token = rawToken.Trim();
@@ -26,22 +52,18 @@ public static class PageRangeParser
                 return null;
             }
 
-            var resolved = parts.Select(part => ResolveBound(part.Trim(), pageCount)).ToList();
+            var resolved = parts.Select(part => ResolveBound(part.Trim(), pageCount)).ToArray();
             if (resolved.Any(bound => bound is null))
             {
                 return null;
             }
 
             var start = resolved[0]!.Value;
-            var end = resolved.Count == 2 ? resolved[1]!.Value : start;
-            var step = start <= end ? 1 : -1;
-            for (var page = start; page != end + step; page += step)
-            {
-                pages.Add(page);
-            }
+            var end = resolved.Length == 2 ? resolved[1]!.Value : start;
+            ranges.Add((start, end));
         }
 
-        return pages;
+        return ranges;
     }
 
     private static int? ResolveBound(string bound, int pageCount) => bound switch

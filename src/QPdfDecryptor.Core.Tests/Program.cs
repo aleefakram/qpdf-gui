@@ -44,7 +44,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Page range parses simple lists", ParsesSimpleList),
     ("Page range resolves z and reversed ranges", ResolvesZAndReversed),
     ("Page range rejects garbage and out-of-bounds", RejectsGarbageAndOutOfBounds),
-    ("Page count service reads show-npages output", ReadsShowPagesOutput)
+    ("Page count service reads show-npages output", ReadsShowPagesOutput),
+    ("Is valid agrees with parse outcomes", IsValidAgreesWithParse)
 };
 
 var failures = 0;
@@ -845,12 +846,14 @@ static Task ParsesSimpleList()
     var pages = PageRangeParser.Parse("1-3,5", 12)
         ?? throw new Exception("expected parse");
     AssertSequence(pages, 1, 2, 3, 5);
+    AssertSequence(PageRangeParser.Parse("2,2", 3)!, 2, 2);
     return Task.CompletedTask;
 }
 
 static Task ResolvesZAndReversed()
 {
     AssertSequence(PageRangeParser.Parse("z", 3)!, 3);
+    AssertSequence(PageRangeParser.Parse("Z", 3)!, 3);
     AssertSequence(PageRangeParser.Parse("z-1", 3)!, 3, 2, 1);
     AssertSequence(PageRangeParser.Parse("2-z", 4)!, 2, 3, 4);
     return Task.CompletedTask;
@@ -861,6 +864,8 @@ static Task RejectsGarbageAndOutOfBounds()
     foreach (var text in new[] { "", "  ", "0", "-2", "4", "1-", "a", "1--3", "1,,2", "1-,3" })
         if (PageRangeParser.Parse(text, 3) != null)
             throw new Exception($"'{text}' should be invalid");
+    if (PageRangeParser.Parse("1", 0) != null)
+        throw new Exception("'1' with a zero page count should be invalid");
     return Task.CompletedTask;
 }
 
@@ -885,6 +890,15 @@ static async Task ReadsShowPagesOutput()
     {
         Directory.Delete(directory, recursive: true);
     }
+}
+
+static Task IsValidAgreesWithParse()
+{
+    Assert(PageRangeParser.IsValid("1-3,5,z", 12), "'1-3,5,z' should be valid for 12 pages.");
+    Assert(PageRangeParser.IsValid("4", 12), "'4' should be valid for 12 pages, agreeing with Parse.");
+    Assert(!PageRangeParser.IsValid("4", 3), "'4' should be invalid for 3 pages.");
+    Assert(PageRangeParser.IsValid("1-z", int.MaxValue), "'1-z' should validate without expanding every page.");
+    return Task.CompletedTask;
 }
 
 static void AssertSequence(IReadOnlyList<int> actual, params int[] expected)
