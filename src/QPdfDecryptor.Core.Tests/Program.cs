@@ -18,6 +18,23 @@ if (args.Contains("--show-npages", StringComparer.Ordinal))
 }
 
 var fakeExit = Environment.GetEnvironmentVariable("FAKE_QPDF_EXIT") is { } coded ? int.Parse(coded) : 0;
+
+// Split runs: real qpdf names outputs <template-without-ext>-N-M<ext> as siblings of the
+// given output path, success or failure alike (partial output survives a mid-run crash).
+if (args.Any(a => a.StartsWith("--split-pages=", StringComparison.Ordinal)))
+{
+    var template = args.LastOrDefault(a => !a.StartsWith('-'));
+    if (template is not null)
+    {
+        var extension = Path.GetExtension(template);
+        var stem = template[..^extension.Length];
+        File.WriteAllText(stem + "-1-2" + extension, "%PDF-1.4 fake");
+        File.WriteAllText(stem + "-3-4" + extension, "%PDF-1.4 fake");
+    }
+
+    return fakeExit;
+}
+
 if (fakeExit != 0 || Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR") is not null)
 {
     var stderr = Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR");
@@ -73,7 +90,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Executor moves temp output on success", ExecutorMovesTempOnSuccess),
     ("Executor refuses to overwrite on move", ExecutorRefusesOverwriteOnMove),
     ("Executor reports friendly encrypted-input error", ExecutorFriendlyErrors),
-    ("Executor cleans split sibling outputs on failure", ExecutorCleansSplitSiblings)
+    ("Executor cleans split sibling outputs on failure", ExecutorCleansSplitSiblings),
+    ("Executor moves split siblings onto target stems", ExecutorMovesSplitSiblingsOntoTargetStems)
 };
 
 var failures = 0;
@@ -963,9 +981,13 @@ static Task OrganizeBuildsArguments()
 static Task CompressBuildsArguments()
 {
     IQpdfFileOperation linearized = new CompressRequest("q.exe", "in.pdf", true, "o.pdf");
-    if (!linearized.BuildArguments("t").Contains("--linearize")) throw new Exception("missing --linearize");
+    AssertArgs(linearized.BuildArguments("t"),
+        "--compress-streams=y", "--recompress-flate", "--object-streams=generate",
+        "--decode-level=generalized", "--linearize", "in.pdf", "t");
     IQpdfFileOperation plain = new CompressRequest("q.exe", "in.pdf", false, "o.pdf");
-    if (plain.BuildArguments("t").Contains("--linearize")) throw new Exception("unexpected --linearize");
+    AssertArgs(plain.BuildArguments("t"),
+        "--compress-streams=y", "--recompress-flate", "--object-streams=generate",
+        "--decode-level=generalized", "in.pdf", "t");
     return Task.CompletedTask;
 }
 
@@ -1063,7 +1085,8 @@ static async Task ExecutorCleansSplitSiblings()
         Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", "2");
         try
         {
-            // A failing split-shaped run must leave no temp/sibling artifacts behind.
+            // The failing fake now writes partial split siblings first, so this asserts
+            // cleanup really removed both siblings and the temp file.
             var outcome = await QpdfOperationService.RunAsync(
                 new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")));
             Assert(!outcome.Succeeded, "must fail");
@@ -1073,6 +1096,29 @@ static async Task ExecutorCleansSplitSiblings()
         {
             Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", null);
         }
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorMovesSplitSiblingsOntoTargetStems()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        await File.WriteAllTextAsync(input, "x");
+
+        var outcome = await QpdfOperationService.RunAsync(
+            new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")));
+
+        Assert(outcome.Succeeded, outcome.Details);
+        Assert(File.Exists(Path.Combine(workspace, "base-1-2.tmp")), "first split sibling was not moved onto the target stem");
+        Assert(File.Exists(Path.Combine(workspace, "base-3-4.tmp")), "second split sibling was not moved onto the target stem");
+        Assert(!Directory.EnumerateFiles(workspace).Any(f => f.Contains(".base.pdf.")), "a temporary artifact was left behind");
+        Assert(outcome.OutputBytes > 0, "expected size reporting");
     }
     finally
     {

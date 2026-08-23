@@ -84,16 +84,23 @@ public static partial class QpdfOperationService
 
         var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(targetPath))!;
         var targetStem = Path.GetFileNameWithoutExtension(targetPath);
+        var stemLength = Path.GetFileNameWithoutExtension(temporaryOutputPath).Length;
+        var moves = new List<(string Source, string Destination)>(matches.Count);
         foreach (var produced in matches)
         {
-            var suffix = Path.GetFileName(produced)[Path.GetFileNameWithoutExtension(produced).Length..];
+            var suffix = Path.GetFileName(produced)[stemLength..];
             var destination = Path.Combine(targetDirectory, targetStem + suffix);
             if (File.Exists(destination))
             {
                 throw new IOException($"Refusing to overwrite existing split output: {destination}");
             }
 
-            File.Move(produced, destination);
+            moves.Add((produced, destination));
+        }
+
+        foreach (var (source, destination) in moves)
+        {
+            File.Move(source, destination);
         }
     }
 
@@ -107,8 +114,30 @@ public static partial class QpdfOperationService
             : [];
     }
 
-    private static long? OutputSize(string targetPath) =>
-        File.Exists(targetPath) ? new FileInfo(targetPath).Length : null;
+    private static long? OutputSize(string targetPath)
+    {
+        var fullTargetPath = Path.GetFullPath(targetPath);
+        if (File.Exists(fullTargetPath))
+        {
+            return new FileInfo(fullTargetPath).Length;
+        }
+
+        // Split runs never produce the exact target file, only <stem><suffix> siblings.
+        var directory = Path.GetDirectoryName(fullTargetPath)!;
+        var stem = Path.GetFileNameWithoutExtension(fullTargetPath);
+        if (!Directory.Exists(directory))
+        {
+            return null;
+        }
+
+        long total = 0;
+        foreach (var produced in Directory.EnumerateFiles(directory, stem + "*"))
+        {
+            total += new FileInfo(produced).Length;
+        }
+
+        return total > 0 ? total : null;
+    }
 
     public static string FriendlyError(string details)
     {
