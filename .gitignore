@@ -29,6 +29,7 @@ PRODUCT.md
 # Agent / IDE tooling dirs
 .agents/
 .impeccable/
+.superpowers/
 /docs/superpowers/
 
 # macOS junk files
