@@ -8,12 +8,12 @@ namespace QPdfDecryptor.Operations;
 
 public partial class MergeViewModel : ObservableObject, IBusyPage
 {
-    private readonly Func<MergeRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
+    private readonly Func<MergeRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
 
-    public MergeViewModel(Func<MergeRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
+    public MergeViewModel(Func<MergeRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
     {
-        this.run = run ?? ((request, progress, cancellationToken) =>
-            QpdfOperationService.RunAsync(request, progress, cancellationToken));
+        this.run = run ?? ((request, allowOverwrite, progress, cancellationToken) =>
+            QpdfOperationService.RunAsync(request, progress, cancellationToken, allowOverwrite));
         InputPaths.CollectionChanged += OnInputPathsChanged;
     }
 
@@ -33,6 +33,9 @@ public partial class MergeViewModel : ObservableObject, IBusyPage
     [ObservableProperty]
     private OperationOutcome? outcome;
 
+    [ObservableProperty]
+    private bool allowOverwrite;
+
     public event EventHandler? BusyStateChanged;
 
     public MergeRequest CreateRequest(string qpdfPath) => new(qpdfPath, [.. InputPaths], OutputPath);
@@ -47,12 +50,13 @@ public partial class MergeViewModel : ObservableObject, IBusyPage
         IsBusy = true;
         try
         {
-            Outcome = await run(CreateRequest(QpdfLocator.Path),
+            Outcome = await run(CreateRequest(QpdfLocator.Path), AllowOverwrite,
                 new Progress<int>(value => StatusPercent = value), cancellationToken);
         }
         finally
         {
             IsBusy = false;
+            AllowOverwrite = false;
         }
     }
 

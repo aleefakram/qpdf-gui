@@ -58,7 +58,7 @@ public static class Program
     private static async Task MergeRunLifecycle()
     {
         OperationOutcome? received = new(true, false, 5, string.Empty, "ok");
-        var vm = new Operations.MergeViewModel((request, progress, cancellationToken) =>
+        var vm = new Operations.MergeViewModel((request, allowOverwrite, progress, cancellationToken) =>
         {
             Assert(request.InputPaths.Count == 1, "request should carry inputs");
             return Task.FromResult(received!);

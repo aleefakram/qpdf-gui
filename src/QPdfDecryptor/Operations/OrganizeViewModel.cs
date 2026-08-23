@@ -6,12 +6,12 @@ namespace QPdfDecryptor.Operations;
 
 public partial class OrganizeViewModel : ObservableObject, IBusyPage
 {
-    private readonly Func<OrganizeRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
+    private readonly Func<OrganizeRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
 
-    public OrganizeViewModel(Func<OrganizeRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
+    public OrganizeViewModel(Func<OrganizeRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
     {
-        this.run = run ?? ((request, progress, cancellationToken) =>
-            QpdfOperationService.RunAsync(request, progress, cancellationToken));
+        this.run = run ?? ((request, allowOverwrite, progress, cancellationToken) =>
+            QpdfOperationService.RunAsync(request, progress, cancellationToken, allowOverwrite));
     }
 
     [ObservableProperty]
@@ -39,6 +39,9 @@ public partial class OrganizeViewModel : ObservableObject, IBusyPage
 
     [ObservableProperty]
     private OperationOutcome? outcome;
+
+    [ObservableProperty]
+    private bool allowOverwrite;
 
     public event EventHandler? BusyStateChanged;
 
@@ -81,12 +84,13 @@ public partial class OrganizeViewModel : ObservableObject, IBusyPage
         IsBusy = true;
         try
         {
-            Outcome = await run(CreateRequest(QpdfLocator.Path),
+            Outcome = await run(CreateRequest(QpdfLocator.Path), AllowOverwrite,
                 new Progress<int>(value => StatusPercent = value), cancellationToken);
         }
         finally
         {
             IsBusy = false;
+            AllowOverwrite = false;
         }
     }
 

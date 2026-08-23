@@ -6,12 +6,12 @@ namespace QPdfDecryptor.Operations;
 
 public partial class SplitViewModel : ObservableObject, IBusyPage
 {
-    private readonly Func<SplitRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
+    private readonly Func<SplitRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
 
-    public SplitViewModel(Func<SplitRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
+    public SplitViewModel(Func<SplitRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
     {
-        this.run = run ?? ((request, progress, cancellationToken) =>
-            QpdfOperationService.RunAsync(request, progress, cancellationToken));
+        this.run = run ?? ((request, allowOverwrite, progress, cancellationToken) =>
+            QpdfOperationService.RunAsync(request, progress, cancellationToken, allowOverwrite));
     }
 
     [ObservableProperty]
@@ -40,9 +40,8 @@ public partial class SplitViewModel : ObservableObject, IBusyPage
     [ObservableProperty]
     private OperationOutcome? outcome;
 
-    /// Estimated sibling-file count once the input's page count is known; null until then.
     [ObservableProperty]
-    private int? estimatedFileCount;
+    private bool allowOverwrite;
 
     public event EventHandler? BusyStateChanged;
 
@@ -62,12 +61,13 @@ public partial class SplitViewModel : ObservableObject, IBusyPage
         IsBusy = true;
         try
         {
-            Outcome = await run(CreateRequest(QpdfLocator.Path),
+            Outcome = await run(CreateRequest(QpdfLocator.Path), AllowOverwrite,
                 new Progress<int>(value => StatusPercent = value), cancellationToken);
         }
         finally
         {
             IsBusy = false;
+            AllowOverwrite = false;
         }
     }
 

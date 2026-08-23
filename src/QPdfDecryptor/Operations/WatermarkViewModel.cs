@@ -6,12 +6,12 @@ namespace QPdfDecryptor.Operations;
 
 public partial class WatermarkViewModel : ObservableObject, IBusyPage
 {
-    private readonly Func<WatermarkRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
+    private readonly Func<WatermarkRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
 
-    public WatermarkViewModel(Func<WatermarkRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
+    public WatermarkViewModel(Func<WatermarkRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
     {
-        this.run = run ?? ((request, progress, cancellationToken) =>
-            QpdfOperationService.RunAsync(request, progress, cancellationToken));
+        this.run = run ?? ((request, allowOverwrite, progress, cancellationToken) =>
+            QpdfOperationService.RunAsync(request, progress, cancellationToken, allowOverwrite));
     }
 
     [ObservableProperty]
@@ -40,6 +40,9 @@ public partial class WatermarkViewModel : ObservableObject, IBusyPage
     [ObservableProperty]
     private OperationOutcome? outcome;
 
+    [ObservableProperty]
+    private bool allowOverwrite;
+
     public event EventHandler? BusyStateChanged;
 
     public WatermarkRequest CreateRequest(string qpdfPath) =>
@@ -57,12 +60,13 @@ public partial class WatermarkViewModel : ObservableObject, IBusyPage
         IsBusy = true;
         try
         {
-            Outcome = await run(CreateRequest(QpdfLocator.Path),
+            Outcome = await run(CreateRequest(QpdfLocator.Path), AllowOverwrite,
                 new Progress<int>(value => StatusPercent = value), cancellationToken);
         }
         finally
         {
             IsBusy = false;
+            AllowOverwrite = false;
         }
     }
 

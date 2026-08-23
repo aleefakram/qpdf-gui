@@ -75,10 +75,32 @@ public partial class RotatePage : UserControl, IBusyPage
             return;
         }
 
-        if (System.IO.File.Exists(viewModel.OutputPath) &&
-            OverwriteDialog.Ask(OwnerWindow(), viewModel.OutputPath) != OverwriteDialog.Decision.Replace)
+        if (System.IO.File.Exists(viewModel.OutputPath))
         {
-            return;
+            var decision = OverwriteDialog.Ask(OwnerWindow(), viewModel.OutputPath);
+            if (decision == OverwriteDialog.Decision.Dismissed)
+            {
+                return;
+            }
+
+            if (decision == OverwriteDialog.Decision.ChooseDifferent)
+            {
+                var dialog = new SaveFileDialog
+                {
+                    Filter = "PDF files|*.pdf",
+                    FileName = System.IO.Path.GetFileName(viewModel.OutputPath),
+                };
+                if (dialog.ShowDialog(OwnerWindow()) != true)
+                {
+                    return;
+                }
+
+                viewModel.OutputPath = dialog.FileName;
+            }
+            else
+            {
+                viewModel.AllowOverwrite = true;
+            }
         }
 
         Status.Clear();
@@ -89,6 +111,10 @@ public partial class RotatePage : UserControl, IBusyPage
         catch (OperationCanceledException)
         {
             Status.Clear();
+        }
+        finally
+        {
+            viewModel.AllowOverwrite = false;
         }
     }
 

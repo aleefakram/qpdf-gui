@@ -82,7 +82,6 @@ public partial class SplitPage : UserControl, IBusyPage
         var inputPath = viewModel.InputPath;
         var pagesPerFile = viewModel.PagesPerFile;
         cachedPageCount = null;
-        viewModel.EstimatedFileCount = null;
         EstimateHint.Visibility = Visibility.Collapsed;
         if (inputPath.Trim().Length == 0 || pagesPerFile < 1)
         {
@@ -120,7 +119,6 @@ public partial class SplitPage : UserControl, IBusyPage
         }
 
         var files = (int)Math.Ceiling(count / (double)viewModel.PagesPerFile);
-        viewModel.EstimatedFileCount = files;
         var stem = viewModel.OutputStem.Trim();
         EstimateHint.Text = files == 1
             ? "Produces 1 file."

@@ -12,7 +12,8 @@ public static partial class QpdfOperationService
     public static async Task<OperationOutcome> RunAsync(
         IQpdfFileOperation operation,
         IProgress<int>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool allowOverwrite = false)
     {
         operation.Validate();
 
@@ -44,7 +45,7 @@ public static partial class QpdfOperationService
                 .Where(value => value.Length > 0));
             if ((result.ExitCode is 0 or 3) && TargetFilesExist(temporaryOutputPath))
             {
-                MoveOutputsToTarget(temporaryOutputPath, operation.OutputPath);
+                MoveOutputsToTarget(temporaryOutputPath, operation.OutputPath, allowOverwrite);
                 progress?.Report(100);
                 return new OperationOutcome(true, result.ExitCode == 3, OutputSize(operation.OutputPath), string.Empty, details);
             }
@@ -86,12 +87,12 @@ public static partial class QpdfOperationService
     private static bool TargetFilesExist(string temporaryOutputPath) =>
         TempOutputMatches(temporaryOutputPath).Any();
 
-    private static void MoveOutputsToTarget(string temporaryOutputPath, string targetPath)
+    private static void MoveOutputsToTarget(string temporaryOutputPath, string targetPath, bool allowOverwrite)
     {
         var matches = TempOutputMatches(temporaryOutputPath).ToList();
         if (matches.Count == 1 && Path.GetFullPath(matches[0]) == Path.GetFullPath(temporaryOutputPath))
         {
-            File.Move(temporaryOutputPath, targetPath, overwrite: false);
+            File.Move(temporaryOutputPath, targetPath, overwrite: allowOverwrite);
             return;
         }
 
@@ -104,7 +105,7 @@ public static partial class QpdfOperationService
             var fileName = Path.GetFileName(produced);
             var relative = Path.GetFileNameWithoutExtension(fileName[stemLength..]);
             var destination = Path.Combine(targetDirectory, targetStem + relative + Path.GetExtension(targetPath));
-            if (File.Exists(destination))
+            if (!allowOverwrite && File.Exists(destination))
             {
                 throw new IOException($"Refusing to overwrite existing split output: {destination}");
             }
@@ -114,7 +115,7 @@ public static partial class QpdfOperationService
 
         foreach (var (source, destination) in moves)
         {
-            File.Move(source, destination);
+            File.Move(source, destination, overwrite: allowOverwrite);
         }
     }
 

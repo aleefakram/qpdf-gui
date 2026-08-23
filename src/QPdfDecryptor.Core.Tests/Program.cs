@@ -103,6 +103,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Watermark toggles overlay and underlay", WatermarkTogglesPlacement),
     ("Executor moves temp output on success", ExecutorMovesTempOnSuccess),
     ("Executor refuses to overwrite on move", ExecutorRefusesOverwriteOnMove),
+    ("Executor overwrites when allow-overwrite is set", ExecutorOverwritesWhenAllowOverwriteIsSet),
     ("Executor reports friendly encrypted-input error", ExecutorFriendlyErrors),
     ("Executor cleans split sibling outputs on failure", ExecutorCleansSplitSiblings),
     ("Executor moves split siblings onto target stems", ExecutorMovesSplitSiblingsOntoTargetStems),
@@ -1061,6 +1062,29 @@ static async Task ExecutorRefusesOverwriteOnMove()
         Assert(!outcome.Succeeded, "must refuse");
         Assert(File.ReadAllText(output) == "existing", "existing file must be untouched");
         Assert(!Directory.EnumerateFiles(workspace, "*.tmp").Any(), "temp cleaned after refusal");
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorOverwritesWhenAllowOverwriteIsSet()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+        await File.WriteAllTextAsync(output, "sentinel");
+
+        var outcome = await QpdfOperationService.RunAsync(
+            new CompressRequest(Environment.ProcessPath!, input, false, output), allowOverwrite: true);
+
+        Assert(outcome.Succeeded, outcome.Details);
+        Assert(File.ReadAllText(output) == "%PDF-1.4 fake", "existing output was not overwritten");
+        Assert(!Directory.EnumerateFiles(workspace, "*.tmp").Any(), "temp left behind");
     }
     finally
     {

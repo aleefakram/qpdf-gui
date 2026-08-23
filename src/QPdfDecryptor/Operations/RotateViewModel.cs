@@ -6,12 +6,12 @@ namespace QPdfDecryptor.Operations;
 
 public partial class RotateViewModel : ObservableObject, IBusyPage
 {
-    private readonly Func<RotateRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
+    private readonly Func<RotateRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
 
-    public RotateViewModel(Func<RotateRequest, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
+    public RotateViewModel(Func<RotateRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
     {
-        this.run = run ?? ((request, progress, cancellationToken) =>
-            QpdfOperationService.RunAsync(request, progress, cancellationToken));
+        this.run = run ?? ((request, allowOverwrite, progress, cancellationToken) =>
+            QpdfOperationService.RunAsync(request, progress, cancellationToken, allowOverwrite));
     }
 
     [ObservableProperty]
@@ -43,6 +43,9 @@ public partial class RotateViewModel : ObservableObject, IBusyPage
 
     [ObservableProperty]
     private OperationOutcome? outcome;
+
+    [ObservableProperty]
+    private bool allowOverwrite;
 
     public event EventHandler? BusyStateChanged;
 
@@ -76,12 +79,13 @@ public partial class RotateViewModel : ObservableObject, IBusyPage
         IsBusy = true;
         try
         {
-            Outcome = await run(CreateRequest(QpdfLocator.Path),
+            Outcome = await run(CreateRequest(QpdfLocator.Path), AllowOverwrite,
                 new Progress<int>(value => StatusPercent = value), cancellationToken);
         }
         finally
         {
             IsBusy = false;
+            AllowOverwrite = false;
         }
     }
 
