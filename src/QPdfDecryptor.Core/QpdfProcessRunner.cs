@@ -3,9 +3,9 @@ using System.Text;
 
 namespace QPdfDecryptor.Core;
 
-internal sealed record ProcessRunResult(int ExitCode, string Output, string Error);
+public sealed record ProcessRunResult(int ExitCode, string Output, string Error);
 
-internal static class QpdfProcessRunner
+public static class QpdfProcessRunner
 {
     public static ProcessStartInfo CreateStartInfo(string qpdfPath) => new()
     {
