@@ -1,0 +1,6 @@
+<UserControl x:Class="QPdfDecryptor.Operations.SplitPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Margin="32" FontSize="14" Foreground="{StaticResource MutedInkBrush}"
+               Text="Split arrives in an upcoming task." />
+</UserControl>

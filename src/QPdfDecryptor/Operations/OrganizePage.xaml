@@ -1,0 +1,6 @@
+<UserControl x:Class="QPdfDecryptor.Operations.OrganizePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <TextBlock Margin="32" FontSize="14" Foreground="{StaticResource MutedInkBrush}"
+               Text="Organize arrives in an upcoming task." />
+</UserControl>
