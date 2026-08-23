@@ -15,6 +15,18 @@ public static partial class QpdfOperationService
         CancellationToken cancellationToken = default)
     {
         operation.Validate();
+
+        if (operation.ProbeInputPath.Length > 0)
+        {
+            var probe = await QpdfPasswordProbe.ProbeAsync(
+                operation.QpdfPath, operation.ProbeInputPath, string.Empty, cancellationToken);
+            if (probe.Outcome == ProbeOutcome.Wrong)
+            {
+                return new OperationOutcome(false, false, null,
+                    "This PDF is password-protected. Use Decrypt first.", probe.Error);
+            }
+        }
+
         var temporaryOutputPath = CreateTemporaryOutputPath(operation.OutputPath);
 
         try

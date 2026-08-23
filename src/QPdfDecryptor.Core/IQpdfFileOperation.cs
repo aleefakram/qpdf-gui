@@ -12,4 +12,7 @@ public interface IQpdfFileOperation
 
     /// The complete qpdf argument list, ending "... <tempOutput>".
     IReadOnlyList<string> BuildArguments(string temporaryOutputPath);
+
+    /// Primary input probed for encryption before the operation runs; empty means no probe.
+    string ProbeInputPath { get; }
 }

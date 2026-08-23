@@ -107,6 +107,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Executor cleans split sibling outputs on failure", ExecutorCleansSplitSiblings),
     ("Executor moves split siblings onto target stems", ExecutorMovesSplitSiblingsOntoTargetStems),
     ("Executor reports warnings on exit code three", ExecutorReportsWarningsOnExitCodeThree),
+    ("Encrypted input is refused with a decrypt-first message", EncryptedRefused),
     ("Executor forwards write progress percentages", ExecutorForwardsWriteProgressPercentages)
 };
 
@@ -735,6 +736,13 @@ static async Task<int> RunFakeQpdfProbe(string[] arguments)
         return 2;
     }
 
+    // Only PDFs are ever probed in production; test fixtures use other extensions as
+    // stand-ins for "unencrypted input" so transform operations still run.
+    if (!input.EndsWith(".pdf", StringComparison.Ordinal))
+    {
+        return 2;
+    }
+
     return IsAcceptedPassword(password, input) ? 3 : 0;
 }
 
@@ -1164,6 +1172,32 @@ static async Task ExecutorReportsWarningsOnExitCodeThree()
         {
             Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", null);
         }
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task EncryptedRefused()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "locked.pdf");
+        await File.WriteAllTextAsync(input, "%PDF-1.4 fake");
+        var output = Path.Combine(workspace, "o.pdf");
+
+        var outcome = await QpdfOperationService.RunAsync(
+            new CompressRequest(Environment.ProcessPath!, input, false, output));
+
+        Assert(!outcome.Succeeded, "encrypted input must be refused");
+        if (!outcome.FriendlyError.Contains("Use Decrypt first", StringComparison.Ordinal))
+        {
+            throw new Exception("wrong message: " + outcome.FriendlyError);
+        }
+
+        Assert(!File.Exists(output), "no output may appear");
     }
     finally
     {

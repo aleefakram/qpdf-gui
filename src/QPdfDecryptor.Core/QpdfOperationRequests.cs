@@ -38,6 +38,9 @@ public sealed record MergeRequest(
         arguments.Add(temporaryOutputPath);
         return arguments;
     }
+
+    // Per-file probing of N inputs is deferred; encrypted inputs fail via stderr mapping.
+    public string ProbeInputPath => string.Empty;
 }
 
 public sealed record SplitRequest(
@@ -75,6 +78,8 @@ public sealed record SplitRequest(
         InputPath,
         temporaryOutputPath,
     ];
+
+    public string ProbeInputPath => InputPath;
 }
 
 public sealed record RotateRequest(
@@ -114,6 +119,8 @@ public sealed record RotateRequest(
 
         return ["--rotate=" + rotation, InputPath, temporaryOutputPath];
     }
+
+    public string ProbeInputPath => InputPath;
 }
 
 public sealed record OrganizeRequest(
@@ -149,6 +156,8 @@ public sealed record OrganizeRequest(
         "--",
         temporaryOutputPath,
     ];
+
+    public string ProbeInputPath => InputPath;
 }
 
 public sealed record CompressRequest(
@@ -188,6 +197,8 @@ public sealed record CompressRequest(
         arguments.Add(temporaryOutputPath);
         return arguments;
     }
+
+    public string ProbeInputPath => InputPath;
 }
 
 public sealed record WatermarkRequest(
@@ -224,4 +235,6 @@ public sealed record WatermarkRequest(
         ];
         return arguments;
     }
+
+    public string ProbeInputPath => InputPath;
 }
