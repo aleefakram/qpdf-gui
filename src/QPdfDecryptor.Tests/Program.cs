@@ -14,6 +14,8 @@ public static class Program
             ("Merge command gated on at least one file and output path", MergeGating),
             ("Merge run delegate produces outcome and toggles busy", MergeRunLifecycle),
             ("Split gating requires input, positive pages-per-file, folder and stem", SplitGating),
+            ("Rotate gating and range validation", RotateGating),
+            ("Organize gating requires non-empty valid ranges", OrganizeGating),
         };
 
         foreach (var test in tests)
@@ -77,6 +79,36 @@ public static class Program
         Assert(vm.RunCommand.CanExecute(null), "runnable after fill");
         vm.PagesPerFile = 0;
         Assert(!vm.RunCommand.CanExecute(null), "zero pages-per-file disables");
+        return Task.CompletedTask;
+    }
+
+    private static Task RotateGating()
+    {
+        var vm = new Operations.RotateViewModel();
+        Assert(!vm.RunCommand.CanExecute(null), "starts disabled");
+        vm.InputPath = "in.pdf"; vm.OutputPath = "out.pdf";
+        Assert(vm.RunCommand.CanExecute(null), "defaults runnable");
+        vm.PageRange = "99"; vm.KnownPageCount = 12;
+        Assert(!vm.RunCommand.CanExecute(null), "out-of-bounds disables");
+        if (vm.RangeError.Length == 0) throw new Exception("range error missing");
+        vm.PageRange = "1-3,z";
+        Assert(vm.RunCommand.CanExecute(null), "valid range runs");
+        return Task.CompletedTask;
+    }
+
+    private static Task OrganizeGating()
+    {
+        var vm = new Operations.OrganizeViewModel();
+        vm.InputPath = "in.pdf";
+        vm.OutputPath = "o.pdf";
+        vm.PageRanges = "";
+        Assert(!vm.RunCommand.CanExecute(null), "empty ranges disable");
+        if (vm.RangeError.Length == 0) throw new Exception("empty-range hint missing");
+        vm.PageRanges = "z,1";
+        vm.KnownPageCount = 5;
+        Assert(vm.RunCommand.CanExecute(null), "reversed ranges valid");
+        vm.PageRanges = "6";
+        Assert(!vm.RunCommand.CanExecute(null), "6 of 5 pages disables");
         return Task.CompletedTask;
     }
 

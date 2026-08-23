@@ -1,6 +1,53 @@
 <UserControl x:Class="QPdfDecryptor.Operations.OrganizePage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <TextBlock Margin="32" FontSize="14" Foreground="{StaticResource MutedInkBrush}"
-               Text="Organize arrives in an upcoming task." />
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:QPdfDecryptor.Controls">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="640" Margin="32,26,32,30" HorizontalAlignment="Stretch">
+            <TextBlock Text="Organize pages" FontSize="22" FontWeight="SemiBold" x:Name="PageHeading" />
+            <TextBlock Text="Choose which pages to keep, and in what order."
+                       Foreground="{StaticResource MutedInkBrush}" Margin="0,4,0,18" />
+
+            <controls:RunStatusControl x:Name="Status" />
+
+            <TextBlock Text="INPUT PDF" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{StaticResource MutedInkBrush}" Margin="0,4,0,6" />
+            <Border MinHeight="88" Padding="20,14" CornerRadius="6" Background="White"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    AllowDrop="True" Drop="DropTarget_Drop" DragEnter="DropTarget_DragEnter">
+                <StackPanel>
+                    <TextBox Text="{Binding InputPath, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="True" />
+                    <Button Content="Choose _PDF&#x2026;" Click="ChoosePdf_Click" Margin="0,8,0,0"
+                            HorizontalAlignment="Center" Background="Transparent" BorderThickness="0"
+                            Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" Cursor="Hand" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="PAGES TO KEEP" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{StaticResource MutedInkBrush}" Margin="0,20,0,6" />
+            <TextBox Text="{Binding PageRanges, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock Text="Order matters &#x2014; z,1 reverses the document. Omitted pages are removed."
+                       FontSize="12" Foreground="{StaticResource MutedInkBrush}" Margin="0,4,0,0" />
+            <TextBlock Text="{Binding RangeError}" FontSize="12"
+                       Foreground="{StaticResource ErrorBrush}" Margin="0,4,0,0" />
+
+            <TextBlock Text="SAVE ORGANIZED PDF AS" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{StaticResource MutedInkBrush}" Margin="0,20,0,6" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox Text="{Binding OutputPath, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="True" />
+                <Button Grid.Column="1" Content="Choose _location&#x2026;" Margin="8,0,0,0" Click="ChooseOutput_Click" />
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
+                <Button Content="_Organize pages" Style="{StaticResource PrimaryButton}"
+                        Command="{Binding RunCommand}" Click="Run_Click" />
+                <Button Content="_Cancel" Margin="8,0,0,0" x:Name="CancelButton"
+                        Visibility="Hidden" Click="Cancel_Click" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
 </UserControl>
