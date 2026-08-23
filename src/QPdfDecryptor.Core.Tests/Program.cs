@@ -11,6 +11,12 @@ if (args.Contains("--password-file=-", StringComparer.Ordinal))
     return await RunFakeQpdf(args);
 }
 
+if (args.Contains("--show-npages", StringComparer.Ordinal))
+{
+    Console.WriteLine(Environment.GetEnvironmentVariable("FAKE_QPDF_PAGES") ?? "1");
+    return 0;
+}
+
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("Password is sent through stdin", PasswordUsesStandardInput),
@@ -34,7 +40,11 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Existing output is renamed when policy is AutoRename", ExistingOutputIsRenamed),
     ("Existing output is skipped when policy is Skip", ExistingOutputIsSkipped),
     ("Cancelling keeps finished outputs and leaves no temporary files", BulkCancellationKeepsFinishedOutputs),
-    ("Recursive inputs preserve relative subpaths", RecursiveInputsPreserveRelativeSubpaths)
+    ("Recursive inputs preserve relative subpaths", RecursiveInputsPreserveRelativeSubpaths),
+    ("Page range parses simple lists", ParsesSimpleList),
+    ("Page range resolves z and reversed ranges", ResolvesZAndReversed),
+    ("Page range rejects garbage and out-of-bounds", RejectsGarbageAndOutOfBounds),
+    ("Page count service reads show-npages output", ReadsShowPagesOutput)
 };
 
 var failures = 0;
@@ -828,6 +838,59 @@ static async Task ParserHandlesRealWorldLists()
     {
         Directory.Delete(directory, recursive: true);
     }
+}
+
+static Task ParsesSimpleList()
+{
+    var pages = PageRangeParser.Parse("1-3,5", 12)
+        ?? throw new Exception("expected parse");
+    AssertSequence(pages, 1, 2, 3, 5);
+    return Task.CompletedTask;
+}
+
+static Task ResolvesZAndReversed()
+{
+    AssertSequence(PageRangeParser.Parse("z", 3)!, 1, 2, 3);
+    AssertSequence(PageRangeParser.Parse("z-1", 3)!, 3, 2, 1);
+    AssertSequence(PageRangeParser.Parse("2-z", 4)!, 2, 3, 4);
+    return Task.CompletedTask;
+}
+
+static Task RejectsGarbageAndOutOfBounds()
+{
+    foreach (var text in new[] { "", "  ", "0", "-2", "4", "1-", "a", "1--3", "1,,2", "1-,3" })
+        if (PageRangeParser.Parse(text, 3) != null)
+            throw new Exception($"'{text}' should be invalid");
+    return Task.CompletedTask;
+}
+
+static async Task ReadsShowPagesOutput()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_PAGES", "7");
+        try
+        {
+            var count = await PageCountService.GetPageCountAsync(
+                Environment.ProcessPath!, Path.Combine(directory, "x.pdf"), CancellationToken.None);
+            Assert(count == 7, $"Expected 7 pages, got {count}.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_PAGES", null);
+        }
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void AssertSequence(IReadOnlyList<int> actual, params int[] expected)
+{
+    if (!actual.SequenceEqual(expected))
+        throw new Exception($"[{string.Join(',', actual)}] != [{string.Join(',', expected)}]");
 }
 
 static string? FindRealQpdf()
