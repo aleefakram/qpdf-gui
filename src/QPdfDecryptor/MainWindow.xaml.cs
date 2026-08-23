@@ -15,15 +15,19 @@ public partial class MainWindow : Window
         NavList.SelectionChanged -= NavList_SelectionChanged;
         NavList.SelectedItem = OperationCatalog.Find("decrypt");
         NavList.SelectionChanged += NavList_SelectionChanged;
+        NavigateTo(OperationCatalog.Find("decrypt"));
     }
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (NavList.SelectedItem is not OperationInfo info)
+        if (NavList.SelectedItem is OperationInfo info)
         {
-            return;
+            NavigateTo(info);
         }
+    }
 
+    private void NavigateTo(OperationInfo info)
+    {
         PageHost.Content = info.Id switch
         {
             "decrypt" => new Operations.DecryptPage(),
