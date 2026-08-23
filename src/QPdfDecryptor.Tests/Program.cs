@@ -16,6 +16,8 @@ public static class Program
             ("Split gating requires input, positive pages-per-file, folder and stem", SplitGating),
             ("Rotate gating and range validation", RotateGating),
             ("Organize gating requires non-empty valid ranges", OrganizeGating),
+            ("Compress defaults linearize on and gates on paths", CompressGating),
+            ("Watermark placement flag maps overlay and underlay", WatermarkGating),
         };
 
         foreach (var test in tests)
@@ -109,6 +111,28 @@ public static class Program
         Assert(vm.RunCommand.CanExecute(null), "reversed ranges valid");
         vm.PageRanges = "6";
         Assert(!vm.RunCommand.CanExecute(null), "6 of 5 pages disables");
+        return Task.CompletedTask;
+    }
+
+    private static Task CompressGating()
+    {
+        var vm = new Operations.CompressViewModel();
+        if (!vm.LinearizeForWeb) throw new Exception("default should be optimized-for-web ON");
+        vm.InputPath = "in.pdf"; vm.OutputPath = "o.pdf";
+        if (!vm.RunCommand.CanExecute(null)) throw new Exception("should run");
+        return Task.CompletedTask;
+    }
+
+    private static Task WatermarkGating()
+    {
+        var vm = new Operations.WatermarkViewModel();
+        Assert(!vm.RunCommand.CanExecute(null), "starts disabled");
+        vm.InputPath = "in.pdf"; vm.WatermarkPdfPath = "wm.pdf"; vm.OutputPath = "o.pdf";
+        if (!vm.RunCommand.CanExecute(null)) throw new Exception("front placement default runnable");
+        var request = vm.CreateRequest(Operations.QpdfLocator.Path);
+        if (((string[])request.BuildArguments("t")).Contains("--underlay")) throw new Exception("default must be overlay");
+        vm.BehindContent = true;
+        if (((string[])request.BuildArguments("t")).Contains("--overlay")) throw new Exception("toggle failed");
         return Task.CompletedTask;
     }
 

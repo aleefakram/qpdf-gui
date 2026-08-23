@@ -197,6 +197,9 @@ public sealed record WatermarkRequest(
     bool BehindContent, // false = overlay (in front), true = underlay (behind)
     string OutputPath) : IQpdfFileOperation
 {
+    // Settable so a view-model can keep an already-built request in step with the UI toggle.
+    public bool BehindContent { get; set; } = BehindContent;
+
     public void Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(QpdfPath);
@@ -211,13 +214,17 @@ public sealed record WatermarkRequest(
         }
     }
 
-    public IReadOnlyList<string> BuildArguments(string temporaryOutputPath) =>
-    [
-        InputPath,
-        BehindContent ? "--underlay" : "--overlay",
-        WatermarkPdfPath,
-        "--repeat=1-z",
-        "--",
-        temporaryOutputPath,
-    ];
+    public IReadOnlyList<string> BuildArguments(string temporaryOutputPath)
+    {
+        string[] arguments =
+        [
+            InputPath,
+            BehindContent ? "--underlay" : "--overlay",
+            WatermarkPdfPath,
+            "--repeat=1-z",
+            "--",
+            temporaryOutputPath,
+        ];
+        return arguments;
+    }
 }
