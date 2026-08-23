@@ -15,12 +15,16 @@ public partial class OverwriteDialog : Window
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) Close(); };
     }
 
-    public static Decision Ask(Window owner, string targetPath)
+    public static Decision Ask(Window owner, string targetPath) =>
+        Ask(owner,
+            $"Replace {System.IO.Path.GetFileName(targetPath)}?",
+            "A file with this name already exists. Replacing it overwrites the existing copy. Your original files are never modified.");
+
+    public static Decision Ask(Window owner, string title, string body)
     {
         var dialog = new OverwriteDialog { Owner = owner };
-        dialog.PromptTitle.Text = $"Replace {System.IO.Path.GetFileName(targetPath)}?";
-        dialog.PromptBody.Text =
-            "A file with this name already exists. Replacing it overwrites the existing copy. Your original files are never modified.";
+        dialog.PromptTitle.Text = title;
+        dialog.PromptBody.Text = body;
         dialog.ShowDialog();
         return dialog.result;
     }

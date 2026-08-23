@@ -135,6 +135,11 @@ public partial class SplitPage : UserControl, IBusyPage
             return;
         }
 
+        if (!ResolveSplitConflicts())
+        {
+            return;
+        }
+
         Status.Clear();
         try
         {
@@ -144,6 +149,62 @@ public partial class SplitPage : UserControl, IBusyPage
         {
             Status.Clear();
         }
+        finally
+        {
+            viewModel.AllowOverwrite = false;
+        }
+    }
+
+    // Split writes many <stem>-N-M.pdf files, so the pre-run check scans for collisions
+    // with that family instead of one exact path. Confirmed Replace threads through to
+    // the executor; ChooseDifferent captures a new stem from the user.
+    private bool ResolveSplitConflicts()
+    {
+        var folder = viewModel.OutputFolder.Trim();
+        var stem = viewModel.OutputStem.Trim();
+        if (folder.Length == 0 || stem.Length == 0 || !System.IO.Directory.Exists(folder))
+        {
+            return true;
+        }
+
+        var existing = System.IO.Directory.GetFiles(folder, stem + "-*.pdf")
+            .Where(file => System.Text.RegularExpressions.Regex.IsMatch(
+                System.IO.Path.GetFileName(file), @"^" + System.Text.RegularExpressions.Regex.Escape(stem) + @"-\d+-\d+\.pdf$"))
+            .ToList();
+
+        if (existing.Count == 0)
+        {
+            return true;
+        }
+
+        var decision = OverwriteDialog.Ask(OwnerWindow(),
+            $"Replace {existing.Count} existing split file(s)?",
+            $"Files like {System.IO.Path.GetFileName(existing[0])} already exist in that folder. " +
+            "Replacing overwrites them. Your original input files are never modified.");
+
+        if (decision == OverwriteDialog.Decision.Replace)
+        {
+            viewModel.AllowOverwrite = true;
+            return true;
+        }
+
+        if (decision == OverwriteDialog.Decision.ChooseDifferent)
+        {
+            var dialog = new SaveFileDialog
+            {
+                Filter = "PDF files|*.pdf",
+                FileName = stem + ".pdf",
+                InitialDirectory = folder,
+            };
+            if (dialog.ShowDialog(OwnerWindow()) == true)
+            {
+                viewModel.OutputFolder = System.IO.Path.GetDirectoryName(dialog.FileName) ?? folder;
+                viewModel.OutputStem = System.IO.Path.GetFileNameWithoutExtension(dialog.FileName);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => viewModel.RunCommand.Cancel();

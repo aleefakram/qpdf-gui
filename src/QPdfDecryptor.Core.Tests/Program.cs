@@ -28,8 +28,10 @@ if (args.Any(a => a.StartsWith("--split-pages=", StringComparison.Ordinal)))
     {
         var extension = Path.GetExtension(template);
         var stem = template[..^extension.Length];
-        File.WriteAllText(stem + "-1-2" + extension, "%PDF-1.4 fake");
-        File.WriteAllText(stem + "-3-4" + extension, "%PDF-1.4 fake");
+        // Verified against real qpdf: the range is appended to the FULL template name —
+        // a non-.pdf template yields extensionless siblings like ".x.abc123.tmp-1-2".
+        File.WriteAllText(stem + "-1-2", "%PDF-1.4 fake");
+        File.WriteAllText(stem + "-3-4", "%PDF-1.4 fake");
     }
 
     return fakeExit;
@@ -110,6 +112,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Executor reports warnings on exit code three", ExecutorReportsWarningsOnExitCodeThree),
     ("Encrypted input is refused with a decrypt-first message", EncryptedRefused),
     ("Validation failure becomes a failed outcome, not an exception", ValidationFailureBecomesOutcome),
+    ("Split collision refusal maps to an actionable message", SplitRefusalMessage),
     ("Executor forwards write progress percentages", ExecutorForwardsWriteProgressPercentages)
 };
 
@@ -1242,6 +1245,18 @@ static async Task ValidationFailureBecomesOutcome()
     {
         throw new Exception("unexpected message: " + outcome.FriendlyError);
     }
+}
+
+static Task SplitRefusalMessage()
+{
+    var message = QpdfOperationService.FriendlyError(
+        "Refusing to overwrite existing split output: C:\\x\\base-1-2.pdf");
+    if (!message.Contains("already exist", StringComparison.Ordinal))
+    {
+        throw new Exception("unexpected mapping: " + message);
+    }
+
+    return Task.CompletedTask;
 }
 
 static async Task ExecutorForwardsWriteProgressPercentages()

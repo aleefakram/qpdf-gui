@@ -168,6 +168,12 @@ public static partial class QpdfOperationService
 
     public static string FriendlyError(string details)
     {
+        if (details.Contains("Refusing to overwrite existing split output", StringComparison.Ordinal))
+        {
+            return "Split files with those names already exist in that folder. " +
+                   "Choose a different file-name start or folder, or delete the previous results.";
+        }
+
         if (details.Contains("invalid password", StringComparison.OrdinalIgnoreCase) ||
             details.Contains("password is incorrect", StringComparison.OrdinalIgnoreCase) ||
             details.Contains("input file is encrypted", StringComparison.OrdinalIgnoreCase))
