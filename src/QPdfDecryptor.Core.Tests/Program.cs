@@ -850,7 +850,7 @@ static Task ParsesSimpleList()
 
 static Task ResolvesZAndReversed()
 {
-    AssertSequence(PageRangeParser.Parse("z", 3)!, 1, 2, 3);
+    AssertSequence(PageRangeParser.Parse("z", 3)!, 3);
     AssertSequence(PageRangeParser.Parse("z-1", 3)!, 3, 2, 1);
     AssertSequence(PageRangeParser.Parse("2-z", 4)!, 2, 3, 4);
     return Task.CompletedTask;
