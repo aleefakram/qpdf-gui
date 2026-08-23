@@ -28,6 +28,10 @@ public partial class DecryptPage : UserControl
 
     private Window? OwnerWindow => Window.GetWindow(this);
 
+    public bool IsBusy => isBusy;
+
+    public event EventHandler? BusyStateChanged;
+
     public DecryptPage()
     {
         InitializeComponent();
@@ -751,6 +755,7 @@ public partial class DecryptPage : UserControl
         ExportReportButton.IsEnabled = !isBusy;
         DecryptProgress.Value = 0;
         UpdateDecryptButtonState();
+        BusyStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void ShowSuccess(string title, string outputPath, string details, bool hasWarnings)

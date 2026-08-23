@@ -7,23 +7,31 @@ namespace QPdfDecryptor;
 
 public partial class MainWindow : Window
 {
+    private OperationInfo currentInfo = OperationCatalog.Find("decrypt");
+
     public MainWindow()
     {
         InitializeComponent();
         NavList.ItemsSource = OperationCatalog.All;
         NavList.Items.GroupDescriptions.Add(new PropertyGroupDescription(nameof(OperationInfo.Group)));
-        NavList.SelectionChanged -= NavList_SelectionChanged;
         NavList.SelectedItem = OperationCatalog.Find("decrypt");
-        NavList.SelectionChanged += NavList_SelectionChanged;
-        NavigateTo(OperationCatalog.Find("decrypt"));
     }
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (NavList.SelectedItem is OperationInfo info)
+        if (NavList.SelectedItem is not OperationInfo info)
         {
-            NavigateTo(info);
+            return;
         }
+
+        if (!ReferenceEquals(info, currentInfo) && PageHost.Content is Operations.DecryptPage { IsBusy: true })
+        {
+            NavList.SelectedItem = currentInfo;
+            return;
+        }
+
+        currentInfo = info;
+        NavigateTo(info);
     }
 
     private void NavigateTo(OperationInfo info)

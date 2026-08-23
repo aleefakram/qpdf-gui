@@ -54,7 +54,7 @@
                                         <Setter TargetName="Pill" Property="Visibility" Value="Visible" />
                                     </Trigger>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="Root" Property="Background" Value="#FFE8EFF1" />
+                                        <Setter TargetName="Root" Property="Background" Value="{StaticResource SurfaceHoverBrush}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
