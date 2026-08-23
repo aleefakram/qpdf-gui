@@ -24,14 +24,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!ReferenceEquals(info, currentInfo) && PageHost.Content is Operations.DecryptPage { IsBusy: true })
+        if (!ReferenceEquals(info, currentInfo))
         {
-            NavList.SelectedItem = currentInfo;
-            return;
-        }
+            if (PageHost.Content is Operations.IBusyPage { IsBusy: true })
+            {
+                NavList.SelectedItem = currentInfo;
+                return;
+            }
 
-        currentInfo = info;
-        NavigateTo(info);
+            currentInfo = info;
+            NavigateTo(info);
+        }
     }
 
     private void NavigateTo(OperationInfo info)

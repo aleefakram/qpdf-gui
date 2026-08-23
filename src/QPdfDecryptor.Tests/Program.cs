@@ -1,3 +1,5 @@
+using QPdfDecryptor.Core;
+
 namespace QPdfDecryptor;
 
 public static class Program
@@ -9,6 +11,8 @@ public static class Program
         {
             ("Catalog registers seven destinations in three groups", CatalogRegistersSevenDestinations),
             ("Catalog groups are Secure Arrange Enhance", CatalogGroupsAreStable),
+            ("Merge command gated on at least one file and output path", MergeGating),
+            ("Merge run delegate produces outcome and toggles busy", MergeRunLifecycle),
         };
 
         foreach (var test in tests)
@@ -33,6 +37,32 @@ public static class Program
         Assert(groups.SequenceEqual(["Secure", "Arrange", "Enhance"]), $"unexpected groups: {string.Join(',', groups)}");
         Assert(OperationCatalog.Find("rotate").Group == "Arrange", "rotate belongs in Arrange");
         return Task.CompletedTask;
+    }
+
+    private static Task MergeGating()
+    {
+        var vm = new Operations.MergeViewModel();
+        Assert(!vm.RunCommand.CanExecute(null), "must start disabled");
+        vm.InputPaths.Add("C:\\tmp\\a.pdf");
+        Assert(!vm.RunCommand.CanExecute(null), "still needs output path");
+        vm.OutputPath = "C:\\tmp\\m.pdf";
+        Assert(vm.RunCommand.CanExecute(null), "should be runnable now");
+        return Task.CompletedTask;
+    }
+
+    private static async Task MergeRunLifecycle()
+    {
+        OperationOutcome? received = new(true, false, 5, string.Empty, "ok");
+        var vm = new Operations.MergeViewModel((request, progress, cancellationToken) =>
+        {
+            Assert(request.InputPaths.Count == 1, "request should carry inputs");
+            return Task.FromResult(received!);
+        });
+        vm.InputPaths.Add("a.pdf");
+        vm.OutputPath = "m.pdf";
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert(vm.Outcome == received, "outcome surfaced");
+        Assert(!vm.IsBusy, "busy cleared after run");
     }
 
     private static void Assert(bool condition, string message)

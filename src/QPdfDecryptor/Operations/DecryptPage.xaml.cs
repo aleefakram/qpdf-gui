@@ -11,7 +11,7 @@ using QPdfDecryptor.Core;
 
 namespace QPdfDecryptor.Operations;
 
-public partial class DecryptPage : UserControl
+public partial class DecryptPage : UserControl, IBusyPage
 {
     private static readonly Brush DefaultDropBorder = new SolidColorBrush(Color.FromRgb(212, 218, 221));
     private static readonly Brush ActiveDropBorder = new SolidColorBrush(Color.FromRgb(22, 123, 130));
