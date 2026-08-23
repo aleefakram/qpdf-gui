@@ -28,7 +28,8 @@ public static partial class QpdfOperationService
             var result = await QpdfProcessRunner.RunAsync(
                 startInfo, stdinText: null, outputLine: line => ReportProgress(line, progress), cancellationToken);
 
-            var details = $"{result.Error}{result.Output}".Trim();
+            var details = string.Join(Environment.NewLine, new[] { result.Error.Trim(), result.Output.Trim() }
+                .Where(value => value.Length > 0));
             if ((result.ExitCode is 0 or 3) && TargetFilesExist(temporaryOutputPath))
             {
                 MoveOutputsToTarget(temporaryOutputPath, operation.OutputPath);
@@ -88,8 +89,9 @@ public static partial class QpdfOperationService
         var moves = new List<(string Source, string Destination)>(matches.Count);
         foreach (var produced in matches)
         {
-            var suffix = Path.GetFileName(produced)[stemLength..];
-            var destination = Path.Combine(targetDirectory, targetStem + suffix);
+            var fileName = Path.GetFileName(produced);
+            var relative = Path.GetFileNameWithoutExtension(fileName[stemLength..]);
+            var destination = Path.Combine(targetDirectory, targetStem + relative + Path.GetExtension(targetPath));
             if (File.Exists(destination))
             {
                 throw new IOException($"Refusing to overwrite existing split output: {destination}");
@@ -168,7 +170,7 @@ public static partial class QpdfOperationService
         return "The PDF could not be processed.";
     }
 
-    public static string CreateTemporaryOutputPath(string outputPath)
+    internal static string CreateTemporaryOutputPath(string outputPath)
     {
         var fullOutputPath = Path.GetFullPath(outputPath);
         var directory = Path.GetDirectoryName(fullOutputPath)
@@ -178,15 +180,16 @@ public static partial class QpdfOperationService
 
     private static void TryDeleteTempOutputs(string temporaryOutputPath)
     {
-        try
+        foreach (var leftover in TempOutputMatches(temporaryOutputPath))
         {
-            foreach (var leftover in TempOutputMatches(temporaryOutputPath))
+            try
             {
                 File.Delete(leftover);
             }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // One undeletable leftover must not abandon the remaining cleanup.
+            }
         }
     }
 

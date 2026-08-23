@@ -14,6 +14,15 @@ public sealed record MergeRequest(
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(OutputPath);
+        foreach (var input in InputPaths)
+        {
+            if (Path.GetFullPath(input).Equals(
+                    Path.GetFullPath(OutputPath),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("The output must be a different file from the input.", nameof(InputPaths));
+            }
+        }
     }
 
     public IReadOnlyList<string> BuildArguments(string temporaryOutputPath)
@@ -37,8 +46,9 @@ public sealed record SplitRequest(
     int PagesPerFile,
     string OutputBasePath) : IQpdfFileOperation
 {
-    // Split writes many files named <base>-<first>-<last>.pdf next to the temp path;
-    // the interface property exists for temp-path placement only.
+    // Real qpdf inserts <first>-<last> before the last extension of the output path, so a
+    // temp path yields siblings like <tempStem>-1-2.tmp; the executor renames them onto
+    // <targetStem>-1-2<targetExt>. The interface property exists for temp-path placement only.
     string IQpdfFileOperation.OutputPath => OutputBasePath;
 
     public void Validate()
@@ -49,6 +59,13 @@ public sealed record SplitRequest(
         if (PagesPerFile < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(PagesPerFile));
+        }
+
+        if (Path.GetFullPath(InputPath).Equals(
+                Path.GetFullPath(OutputBasePath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The output must be a different file from the input.", nameof(InputPath));
         }
     }
 
@@ -75,6 +92,13 @@ public sealed record RotateRequest(
         if (RelativeAngleDegrees is not (90 or -90 or 180))
         {
             throw new ArgumentOutOfRangeException(nameof(RelativeAngleDegrees));
+        }
+
+        if (Path.GetFullPath(InputPath).Equals(
+                Path.GetFullPath(OutputPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The output must be a different file from the input.", nameof(InputPath));
         }
     }
 
@@ -107,6 +131,13 @@ public sealed record OrganizeRequest(
         {
             throw new ArgumentException("Page ranges are invalid.", nameof(PageRanges));
         }
+
+        if (Path.GetFullPath(InputPath).Equals(
+                Path.GetFullPath(OutputPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The output must be a different file from the input.", nameof(InputPath));
+        }
     }
 
     public IReadOnlyList<string> BuildArguments(string temporaryOutputPath) =>
@@ -131,6 +162,12 @@ public sealed record CompressRequest(
         ArgumentException.ThrowIfNullOrWhiteSpace(QpdfPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(InputPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(OutputPath);
+        if (Path.GetFullPath(InputPath).Equals(
+                Path.GetFullPath(OutputPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The output must be a different file from the input.", nameof(InputPath));
+        }
     }
 
     public IReadOnlyList<string> BuildArguments(string temporaryOutputPath)
@@ -166,6 +203,12 @@ public sealed record WatermarkRequest(
         ArgumentException.ThrowIfNullOrWhiteSpace(InputPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(WatermarkPdfPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(OutputPath);
+        if (Path.GetFullPath(InputPath).Equals(
+                Path.GetFullPath(OutputPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The output must be a different file from the input.", nameof(InputPath));
+        }
     }
 
     public IReadOnlyList<string> BuildArguments(string temporaryOutputPath) =>

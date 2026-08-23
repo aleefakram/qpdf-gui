@@ -35,7 +35,9 @@ if (args.Any(a => a.StartsWith("--split-pages=", StringComparison.Ordinal)))
     return fakeExit;
 }
 
-if (fakeExit != 0 || Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR") is not null)
+// Exit code 3 means "success with warnings": qpdf still produces output, so fall
+// through and write it, reporting 3 instead of 0.
+if ((fakeExit != 0 && fakeExit != 3) || Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR") is not null)
 {
     var stderr = Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR");
     if (stderr is not null) Console.Error.WriteLine(stderr);
@@ -46,10 +48,16 @@ if (fakeExit != 0 || Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR") is n
 var written = args.LastOrDefault(a => !a.StartsWith('-'));
 if (written is not null)
 {
+    var progressLine = Environment.GetEnvironmentVariable("FAKE_QPDF_PROGRESS");
+    if (progressLine is not null)
+    {
+        Console.WriteLine($"write progress: {progressLine}%");
+    }
+
     File.WriteAllText(written, "%PDF-1.4 fake");
     // Behave like the intercepted modes above: an invocation with arguments IS a fake
     // qpdf call and must exit immediately instead of re-running the test suite.
-    return 0;
+    return fakeExit;
 }
 
 var tests = new (string Name, Func<Task> Run)[]
@@ -91,7 +99,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Executor refuses to overwrite on move", ExecutorRefusesOverwriteOnMove),
     ("Executor reports friendly encrypted-input error", ExecutorFriendlyErrors),
     ("Executor cleans split sibling outputs on failure", ExecutorCleansSplitSiblings),
-    ("Executor moves split siblings onto target stems", ExecutorMovesSplitSiblingsOntoTargetStems)
+    ("Executor moves split siblings onto target stems", ExecutorMovesSplitSiblingsOntoTargetStems),
+    ("Executor reports warnings on exit code three", ExecutorReportsWarningsOnExitCodeThree),
+    ("Executor forwards write progress percentages", ExecutorForwardsWriteProgressPercentages)
 };
 
 var failures = 0;
@@ -994,9 +1004,9 @@ static Task CompressBuildsArguments()
 static Task WatermarkTogglesPlacement()
 {
     IQpdfFileOperation front = new WatermarkRequest("q.exe", "in.pdf", "wm.pdf", false, "o.pdf");
-    if (!front.BuildArguments("t").Contains("--overlay")) throw new Exception("expected overlay");
+    AssertArgs(front.BuildArguments("t"), "in.pdf", "--overlay", "wm.pdf", "--repeat=1-z", "--", "t");
     IQpdfFileOperation behind = new WatermarkRequest("q.exe", "in.pdf", "wm.pdf", true, "o.pdf");
-    if (!behind.BuildArguments("t").Contains("--underlay")) throw new Exception("expected underlay");
+    AssertArgs(behind.BuildArguments("t"), "in.pdf", "--underlay", "wm.pdf", "--repeat=1-z", "--", "t");
     return Task.CompletedTask;
 }
 
@@ -1115,10 +1125,68 @@ static async Task ExecutorMovesSplitSiblingsOntoTargetStems()
             new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")));
 
         Assert(outcome.Succeeded, outcome.Details);
-        Assert(File.Exists(Path.Combine(workspace, "base-1-2.tmp")), "first split sibling was not moved onto the target stem");
-        Assert(File.Exists(Path.Combine(workspace, "base-3-4.tmp")), "second split sibling was not moved onto the target stem");
-        Assert(!Directory.EnumerateFiles(workspace).Any(f => f.Contains(".base.pdf.")), "a temporary artifact was left behind");
+        Assert(File.Exists(Path.Combine(workspace, "base-1-2.pdf")), "first split sibling was not moved onto the target stem");
+        Assert(File.Exists(Path.Combine(workspace, "base-3-4.pdf")), "second split sibling was not moved onto the target stem");
+        Assert(!Directory.EnumerateFiles(workspace).Any(f => f.Contains(".tmp")), "a temporary artifact was left behind");
         Assert(outcome.OutputBytes > 0, "expected size reporting");
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorReportsWarningsOnExitCodeThree()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", "3");
+        try
+        {
+            var outcome = await QpdfOperationService.RunAsync(
+                new CompressRequest(Environment.ProcessPath!, input, false, output));
+            Assert(outcome.Succeeded && outcome.HasWarnings,
+                $"Expected success with warnings, got {outcome.Succeeded}/{outcome.HasWarnings}.");
+            Assert(File.Exists(output), "The warning-path run did not produce its output.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", null);
+        }
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorForwardsWriteProgressPercentages()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+        var reported = new List<int>();
+        var progress = new CallbackProgress(reported.Add);
+        Environment.SetEnvironmentVariable("FAKE_QPDF_PROGRESS", "42");
+        try
+        {
+            var outcome = await QpdfOperationService.RunAsync(
+                new CompressRequest(Environment.ProcessPath!, input, false, output), progress);
+            Assert(outcome.Succeeded, outcome.Details);
+            Assert(reported.Contains(42),
+                $"Progress 42 was not forwarded: [{string.Join(',', reported)}].");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_PROGRESS", null);
+        }
     }
     finally
     {
