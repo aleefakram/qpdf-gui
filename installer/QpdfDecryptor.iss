@@ -10,11 +10,11 @@
 
 [Setup]
 AppId={{5A43824A-4D82-4C94-9807-9F4969FA31B5}
-AppName=qpdf Decryptor
+AppName=PDF Ninja
 AppVersion={#AppVersion}
 AppPublisher=Internal Tools
-DefaultDirName={localappdata}\Programs\qpdf Decryptor
-DefaultGroupName=qpdf Decryptor
+DefaultDirName={localappdata}\Programs\PDF Ninja
+DefaultGroupName=PDF Ninja
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
