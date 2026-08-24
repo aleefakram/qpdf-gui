@@ -11,6 +11,61 @@ if (args.Contains("--password-file=-", StringComparer.Ordinal))
     return await RunFakeQpdf(args);
 }
 
+if (args.Contains("--show-npages", StringComparer.Ordinal))
+{
+    Console.WriteLine(Environment.GetEnvironmentVariable("FAKE_QPDF_PAGES") ?? "1");
+    return 0;
+}
+
+var fakeExit = Environment.GetEnvironmentVariable("FAKE_QPDF_EXIT") is { } coded ? int.Parse(coded) : 0;
+
+// Split runs: real qpdf names outputs <template-without-ext>-N-M<ext> as siblings of the
+// given output path, success or failure alike (partial output survives a mid-run crash).
+if (args.Any(a => a.StartsWith("--split-pages=", StringComparison.Ordinal)))
+{
+    var template = args.LastOrDefault(a => !a.StartsWith('-'));
+    if (template is not null)
+    {
+        // Verified against real qpdf: the range is appended to the ENTIRE template
+        // path — ".x.abc123.tmp" yields extensionless ".x.abc123.tmp-1-2" siblings.
+        File.WriteAllText(template + "-1-2", "%PDF-1.4 fake");
+        File.WriteAllText(template + "-3-4", "%PDF-1.4 fake");
+    }
+
+    return fakeExit;
+}
+
+// Exit code 3 means "success with warnings": qpdf still produces output, so fall
+// through and write it, reporting 3 instead of 0.
+if ((fakeExit != 0 && fakeExit != 3) || Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR") is not null)
+{
+    var stderr = Environment.GetEnvironmentVariable("FAKE_QPDF_STDERR");
+    if (stderr is not null) Console.Error.WriteLine(stderr);
+    return fakeExit;
+}
+
+// Fallthrough: act like a successful no-op qpdf — write the last non-flag argument.
+var written = args.LastOrDefault(a => !a.StartsWith('-'));
+if (written is not null)
+{
+    // Exit code 3 carries its warning text on stderr while still producing output.
+    if (fakeExit == 3)
+    {
+        Console.Error.WriteLine("WARNING: structural issues detected");
+    }
+
+    var progressLine = Environment.GetEnvironmentVariable("FAKE_QPDF_PROGRESS");
+    if (progressLine is not null)
+    {
+        Console.WriteLine($"write progress: {progressLine}%");
+    }
+
+    File.WriteAllText(written, "%PDF-1.4 fake");
+    // Behave like the intercepted modes above: an invocation with arguments IS a fake
+    // qpdf call and must exit immediately instead of re-running the test suite.
+    return fakeExit;
+}
+
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("Password is sent through stdin", PasswordUsesStandardInput),
@@ -34,7 +89,29 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Existing output is renamed when policy is AutoRename", ExistingOutputIsRenamed),
     ("Existing output is skipped when policy is Skip", ExistingOutputIsSkipped),
     ("Cancelling keeps finished outputs and leaves no temporary files", BulkCancellationKeepsFinishedOutputs),
-    ("Recursive inputs preserve relative subpaths", RecursiveInputsPreserveRelativeSubpaths)
+    ("Recursive inputs preserve relative subpaths", RecursiveInputsPreserveRelativeSubpaths),
+    ("Page range parses simple lists", ParsesSimpleList),
+    ("Page range resolves z and reversed ranges", ResolvesZAndReversed),
+    ("Page range rejects garbage and out-of-bounds", RejectsGarbageAndOutOfBounds),
+    ("Page count service reads show-npages output", ReadsShowPagesOutput),
+    ("Is valid agrees with parse outcomes", IsValidAgreesWithParse),
+    ("Merge builds empty-pages arguments in list order", MergeBuildsArguments),
+    ("Split builds split-pages arguments", SplitBuildsArguments),
+    ("Rotate builds relative rotation with optional range", RotateBuildsArguments),
+    ("Organize builds dot-shorthand pages selection", OrganizeBuildsArguments),
+    ("Compress builds recompression stack with optional linearize", CompressBuildsArguments),
+    ("Watermark toggles overlay and underlay", WatermarkTogglesPlacement),
+    ("Executor moves temp output on success", ExecutorMovesTempOnSuccess),
+    ("Executor refuses to overwrite on move", ExecutorRefusesOverwriteOnMove),
+    ("Executor overwrites when allow-overwrite is set", ExecutorOverwritesWhenAllowOverwriteIsSet),
+    ("Executor reports friendly encrypted-input error", ExecutorFriendlyErrors),
+    ("Executor cleans split sibling outputs on failure", ExecutorCleansSplitSiblings),
+    ("Executor moves split siblings onto target stems", ExecutorMovesSplitSiblingsOntoTargetStems),
+    ("Executor reports warnings on exit code three", ExecutorReportsWarningsOnExitCodeThree),
+    ("Encrypted input is refused with a decrypt-first message", EncryptedRefused),
+    ("Validation failure becomes a failed outcome, not an exception", ValidationFailureBecomesOutcome),
+    ("Split collision refusal maps to an actionable message", SplitRefusalMessage),
+    ("Executor forwards write progress percentages", ExecutorForwardsWriteProgressPercentages)
 };
 
 var failures = 0;
@@ -662,6 +739,13 @@ static async Task<int> RunFakeQpdfProbe(string[] arguments)
         return 2;
     }
 
+    // Only PDFs are ever probed in production; test fixtures use other extensions as
+    // stand-ins for "unencrypted input" so transform operations still run.
+    if (!input.EndsWith(".pdf", StringComparison.Ordinal))
+    {
+        return 2;
+    }
+
     return IsAcceptedPassword(password, input) ? 3 : 0;
 }
 
@@ -828,6 +912,395 @@ static async Task ParserHandlesRealWorldLists()
     {
         Directory.Delete(directory, recursive: true);
     }
+}
+
+static Task ParsesSimpleList()
+{
+    var pages = PageRangeParser.Parse("1-3,5", 12)
+        ?? throw new Exception("expected parse");
+    AssertSequence(pages, 1, 2, 3, 5);
+    AssertSequence(PageRangeParser.Parse("2,2", 3)!, 2, 2);
+    return Task.CompletedTask;
+}
+
+static Task ResolvesZAndReversed()
+{
+    AssertSequence(PageRangeParser.Parse("z", 3)!, 3);
+    AssertSequence(PageRangeParser.Parse("Z", 3)!, 3);
+    AssertSequence(PageRangeParser.Parse("z-1", 3)!, 3, 2, 1);
+    AssertSequence(PageRangeParser.Parse("2-z", 4)!, 2, 3, 4);
+    return Task.CompletedTask;
+}
+
+static Task RejectsGarbageAndOutOfBounds()
+{
+    foreach (var text in new[] { "", "  ", "0", "-2", "4", "1-", "a", "1--3", "1,,2", "1-,3" })
+        if (PageRangeParser.Parse(text, 3) != null)
+            throw new Exception($"'{text}' should be invalid");
+    if (PageRangeParser.Parse("1", 0) != null)
+        throw new Exception("'1' with a zero page count should be invalid");
+    return Task.CompletedTask;
+}
+
+static async Task ReadsShowPagesOutput()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_PAGES", "7");
+        try
+        {
+            var count = await PageCountService.GetPageCountAsync(
+                Environment.ProcessPath!, Path.Combine(directory, "x.pdf"), CancellationToken.None);
+            Assert(count == 7, $"Expected 7 pages, got {count}.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_PAGES", null);
+        }
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static Task IsValidAgreesWithParse()
+{
+    Assert(PageRangeParser.IsValid("1-3,5,z", 12), "'1-3,5,z' should be valid for 12 pages.");
+    Assert(PageRangeParser.IsValid("4", 12), "'4' should be valid for 12 pages, agreeing with Parse.");
+    Assert(!PageRangeParser.IsValid("4", 3), "'4' should be invalid for 3 pages.");
+    Assert(PageRangeParser.IsValid("1-z", int.MaxValue), "'1-z' should validate without expanding every page.");
+    return Task.CompletedTask;
+}
+
+static Task MergeBuildsArguments()
+{
+    var request = new MergeRequest("q.exe", ["a.pdf", "b.pdf"], @"C:\out\m.pdf");
+    AssertArgs(request.BuildArguments(@"C:\out\m.pdf.tmp-x"),
+        "--empty", "--pages", "a.pdf", "1-z", "b.pdf", "1-z", "--", @"C:\out\m.pdf.tmp-x");
+    return Task.CompletedTask;
+}
+
+static Task SplitBuildsArguments()
+{
+    IQpdfFileOperation request = new SplitRequest("q.exe", "in.pdf", 2, @"C:\out\base.pdf");
+    AssertArgs(request.BuildArguments(@"C:\out\base.pdf.t1"), "--split-pages=2", "in.pdf", @"C:\out\base.pdf.t1");
+    return Task.CompletedTask;
+}
+
+static Task RotateBuildsArguments()
+{
+    IQpdfFileOperation right = new RotateRequest("q.exe", "in.pdf", 90, null, "o.pdf");
+    AssertArgs(right.BuildArguments("t"), "--rotate=+90", "in.pdf", "t");
+    IQpdfFileOperation left = new RotateRequest("q.exe", "in.pdf", -90, "2-z", "o.pdf");
+    AssertArgs(left.BuildArguments("t"), "--rotate=-90:2-z", "in.pdf", "t");
+    return Task.CompletedTask;
+}
+
+static Task OrganizeBuildsArguments()
+{
+    IQpdfFileOperation request = new OrganizeRequest("q.exe", "in.pdf", "z, 1", "o.pdf");
+    AssertArgs(request.BuildArguments("t"), "in.pdf", "--pages", ".", "z,1", "--", "t");
+    return Task.CompletedTask;
+}
+
+static Task CompressBuildsArguments()
+{
+    IQpdfFileOperation linearized = new CompressRequest("q.exe", "in.pdf", true, "o.pdf");
+    AssertArgs(linearized.BuildArguments("t"),
+        "--compress-streams=y", "--recompress-flate", "--compression-level=9",
+        "--object-streams=generate", "--decode-level=generalized", "--optimize-images",
+        "--externalize-inline-images", "--ii-min-bytes=1024", "--jpeg-quality=75",
+        "--linearize", "in.pdf", "t");
+    IQpdfFileOperation plain = new CompressRequest("q.exe", "in.pdf", false, "o.pdf", 50);
+    AssertArgs(plain.BuildArguments("t"),
+        "--compress-streams=y", "--recompress-flate", "--compression-level=9",
+        "--object-streams=generate", "--decode-level=generalized", "--optimize-images",
+        "--externalize-inline-images", "--ii-min-bytes=1024", "--jpeg-quality=50",
+        "in.pdf", "t");
+    return Task.CompletedTask;
+}
+
+static Task WatermarkTogglesPlacement()
+{
+    IQpdfFileOperation front = new WatermarkRequest("q.exe", "in.pdf", "wm.pdf", false, "o.pdf");
+    AssertArgs(front.BuildArguments("t"), "in.pdf", "--overlay", "wm.pdf", "--repeat=1-z", "--", "t");
+    IQpdfFileOperation behind = new WatermarkRequest("q.exe", "in.pdf", "wm.pdf", true, "o.pdf");
+    AssertArgs(behind.BuildArguments("t"), "in.pdf", "--underlay", "wm.pdf", "--repeat=1-z", "--", "t");
+    return Task.CompletedTask;
+}
+
+static async Task ExecutorMovesTempOnSuccess()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+
+        var outcome = await QpdfOperationService.RunAsync(new CompressRequest(Environment.ProcessPath!, input, false, output));
+
+        Assert(outcome.Succeeded, outcome.Details);
+        Assert(File.Exists(output), "output was not moved into place");
+        Assert(!Directory.EnumerateFiles(workspace, "*.tmp").Any(), "temp left behind");
+        Assert(outcome.OutputBytes > 0, "expected size reporting");
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorRefusesOverwriteOnMove()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+        await File.WriteAllTextAsync(output, "existing");
+
+        var outcome = await QpdfOperationService.RunAsync(new CompressRequest(Environment.ProcessPath!, input, false, output));
+
+        Assert(!outcome.Succeeded, "must refuse");
+        Assert(File.ReadAllText(output) == "existing", "existing file must be untouched");
+        Assert(!Directory.EnumerateFiles(workspace, "*.tmp").Any(), "temp cleaned after refusal");
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorOverwritesWhenAllowOverwriteIsSet()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+        await File.WriteAllTextAsync(output, "sentinel");
+
+        var outcome = await QpdfOperationService.RunAsync(
+            new CompressRequest(Environment.ProcessPath!, input, false, output), allowOverwrite: true);
+
+        Assert(outcome.Succeeded, outcome.Details);
+        Assert(File.ReadAllText(output) == "%PDF-1.4 fake", "existing output was not overwritten");
+        Assert(!Directory.EnumerateFiles(workspace, "*.tmp").Any(), "temp left behind");
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorFriendlyErrors()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        await File.WriteAllTextAsync(input, "x");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", "2");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_STDERR", "invalid password");
+        try
+        {
+            var outcome = await QpdfOperationService.RunAsync(
+                new CompressRequest(Environment.ProcessPath!, input, false, Path.Combine(workspace, "o.pdf")));
+            Assert(!outcome.Succeeded, "must fail");
+            if (!outcome.FriendlyError.Contains("password-protected"))
+            {
+                throw new Exception("wrong mapping: " + outcome.FriendlyError);
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", null);
+            Environment.SetEnvironmentVariable("FAKE_QPDF_STDERR", null);
+        }
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorCleansSplitSiblings()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        await File.WriteAllTextAsync(input, "x");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", "2");
+        try
+        {
+            // The failing fake now writes partial split siblings first, so this asserts
+            // cleanup really removed both siblings and the temp file.
+            var outcome = await QpdfOperationService.RunAsync(
+                new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")));
+            Assert(!outcome.Succeeded, "must fail");
+            Assert(!Directory.EnumerateFiles(workspace).Any(f => f.Contains(".tmp")), "split siblings/temp must be cleaned");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", null);
+        }
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorMovesSplitSiblingsOntoTargetStems()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        await File.WriteAllTextAsync(input, "x");
+
+        var outcome = await QpdfOperationService.RunAsync(
+            new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")));
+
+        Assert(outcome.Succeeded, outcome.Details);
+        Assert(File.Exists(Path.Combine(workspace, "base-1-2.pdf")), "first split sibling was not moved onto the target stem");
+        Assert(File.Exists(Path.Combine(workspace, "base-3-4.pdf")), "second split sibling was not moved onto the target stem");
+        Assert(!Directory.EnumerateFiles(workspace).Any(f => f.Contains(".tmp")), "a temporary artifact was left behind");
+        Assert(outcome.OutputBytes > 0, "expected size reporting");
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ExecutorReportsWarningsOnExitCodeThree()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", "3");
+        try
+        {
+            var outcome = await QpdfOperationService.RunAsync(
+                new CompressRequest(Environment.ProcessPath!, input, false, output));
+            Assert(outcome.Succeeded && outcome.HasWarnings,
+                $"Expected success with warnings, got {outcome.Succeeded}/{outcome.HasWarnings}.");
+            Assert(outcome.Details.Length > 0, "Expected the warning text to be captured in Details.");
+            Assert(File.Exists(output), "The warning-path run did not produce its output.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_EXIT", null);
+        }
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task EncryptedRefused()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "locked.pdf");
+        await File.WriteAllTextAsync(input, "%PDF-1.4 fake");
+        var output = Path.Combine(workspace, "o.pdf");
+
+        var outcome = await QpdfOperationService.RunAsync(
+            new CompressRequest(Environment.ProcessPath!, input, false, output));
+
+        Assert(!outcome.Succeeded, "encrypted input must be refused");
+        if (!outcome.FriendlyError.Contains("Use Decrypt first", StringComparison.Ordinal))
+        {
+            throw new Exception("wrong message: " + outcome.FriendlyError);
+        }
+
+        Assert(!File.Exists(output), "no output may appear");
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task ValidationFailureBecomesOutcome()
+{
+    // En-dash range: grammar-invalid, and the page-count probe never ran — the executor
+    // must surface Validate()'s exception as a failed outcome (pages are async-void).
+    var outcome = await QpdfOperationService.RunAsync(
+        new OrganizeRequest(Environment.ProcessPath!, "in.txt", "1\u20133", "o.pdf"));
+
+    Assert(!outcome.Succeeded, "must fail");
+    if (!outcome.FriendlyError.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new Exception("unexpected message: " + outcome.FriendlyError);
+    }
+}
+
+static Task SplitRefusalMessage()
+{
+    var message = QpdfOperationService.FriendlyError(
+        "Refusing to overwrite existing split output: C:\\x\\base-1-2.pdf");
+    if (!message.Contains("already exist", StringComparison.Ordinal))
+    {
+        throw new Exception("unexpected mapping: " + message);
+    }
+
+    return Task.CompletedTask;
+}
+
+static async Task ExecutorForwardsWriteProgressPercentages()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        var output = Path.Combine(workspace, "out.pdf");
+        await File.WriteAllTextAsync(input, "x");
+        var reported = new List<int>();
+        var progress = new CallbackProgress(reported.Add);
+        Environment.SetEnvironmentVariable("FAKE_QPDF_PROGRESS", "42");
+        try
+        {
+            var outcome = await QpdfOperationService.RunAsync(
+                new CompressRequest(Environment.ProcessPath!, input, false, output), progress);
+            Assert(outcome.Succeeded, outcome.Details);
+            Assert(reported.Contains(42),
+                $"Progress 42 was not forwarded: [{string.Join(',', reported)}].");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_PROGRESS", null);
+        }
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static void AssertSequence(IReadOnlyList<int> actual, params int[] expected)
+{
+    if (!actual.SequenceEqual(expected))
+        throw new Exception($"[{string.Join(',', actual)}] != [{string.Join(',', expected)}]");
+}
+
+static void AssertArgs(IReadOnlyList<string> actual, params string[] expected)
+{
+    if (!actual.SequenceEqual(expected))
+        throw new Exception($"[{string.Join(',', actual)}] != [{string.Join(',', expected)}]");
 }
 
 static string? FindRealQpdf()

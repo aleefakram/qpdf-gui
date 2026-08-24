@@ -1,0 +1,35 @@
+<UserControl x:Class="QPdfDecryptor.Controls.RunStatusControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <Grid x:Name="ProgressRegion" MinHeight="29" Visibility="Hidden">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock x:Name="ProgressText" Text="Working…" FontSize="13" Margin="0,0,0,7" />
+            <ProgressBar x:Name="ProgressBar" Grid.Row="1" Height="5" Minimum="0" Maximum="100" />
+        </Grid>
+
+        <Border x:Name="StatusRegion" Visibility="Hidden" Margin="0,14,0,0"
+                MinHeight="64" Padding="14,12" CornerRadius="4" Focusable="True"
+                AutomationProperties.LiveSetting="Assertive">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="StatusIcon" FontFamily="Segoe Fluent Icons" FontSize="17" Margin="0,1,10,0" />
+                <StackPanel Grid.Column="1">
+                    <TextBlock x:Name="StatusTitle" FontWeight="SemiBold" FontSize="14" TextWrapping="Wrap"
+                               AutomationProperties.LiveSetting="Assertive" />
+                    <TextBlock x:Name="StatusMessage" Margin="0,4,0,0" FontSize="13" TextWrapping="Wrap" />
+                    <Expander x:Name="DetailsExpander" Header="Technical details" Margin="0,8,0,0" Visibility="Collapsed">
+                        <TextBox x:Name="DetailsText" Margin="0,6,0,0" IsReadOnly="True" TextWrapping="Wrap"
+                                 MaxHeight="110" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="11" />
+                    </Expander>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </StackPanel>
+</UserControl>

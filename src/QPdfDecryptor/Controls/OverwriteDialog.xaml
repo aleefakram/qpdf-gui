@@ -1,0 +1,16 @@
+<Window x:Class="QPdfDecryptor.Controls.OverwriteDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PDF Ninja" Width="420" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        WindowStyle="ToolWindow" Background="{StaticResource SurfaceBrush}">
+    <StackPanel Margin="20">
+        <TextBlock x:Name="PromptTitle" FontSize="17" FontWeight="SemiBold" />
+        <TextBlock x:Name="PromptBody" Margin="0,8,0,0" FontSize="13" TextWrapping="Wrap"
+                   Foreground="{StaticResource MutedInkBrush}" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,18,0,0">
+            <Button Content="_Replace" Style="{StaticResource PrimaryButton}" Click="Replace_Click" />
+            <Button Content="Choose a _different name" Margin="8,0,0,0" Click="DifferentName_Click" />
+        </StackPanel>
+    </StackPanel>
+</Window>

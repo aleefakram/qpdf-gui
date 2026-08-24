@@ -1,11 +1,11 @@
-# QPDF Decryptor
+# PDF Ninja
 
 [![GitHub Release](https://img.shields.io/github/v/release/aleefakram/qpdf-gui?style=flat-square&color=blue)](https://github.com/aleefakram/qpdf-gui/releases/tag/v1.0.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE.txt)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows)](https://github.com/aleefakram/qpdf-gui/releases/tag/v1.0.0)
 [![Powered By: QPDF](https://img.shields.io/badge/Powered%20by-QPDF-orange?style=flat-square)](https://github.com/qpdf/qpdf)
 
-A fast, lightweight Windows app to remove passwords, restrictions, and encryption from PDF files. Drop your file, enter the password if needed, pick where to save — that's it.
+A fast, lightweight Windows app for everyday PDF tasks — decrypt, merge, split, organize, rotate, compress, and watermark — built on the qpdf engine. Pick an operation from the sidebar and follow one clear screen; no command line required.
 
 Built on top of [QPDF](https://github.com/qpdf/qpdf), which handles the native C++ PDF processing under the hood.
 
@@ -15,6 +15,7 @@ Built on top of [QPDF](https://github.com/qpdf/qpdf), which handles the native C
 
 | Feature | Details |
 |---|---|
+| **Operations** | Decrypt · Merge · Split · Organize pages · Rotate · Compress · Watermark |
 | **OS** | Windows 10 / 11 (64-bit standalone executable & installer) |
 | **Privacy** | 100% local processing. Files never leave your machine. |
 | **Dependencies** | None. Single-file publish with embedded runtime binaries. |
@@ -38,7 +39,7 @@ Built on top of [QPDF](https://github.com/qpdf/qpdf), which handles the native C
 
 Most online PDF unlockers require uploading your private documents to an external server with strict file size limits and potential security risks. 
 
-QPDF Decryptor runs entirely on your desktop:
+PDF Ninja runs entirely on your desktop:
 
 - 🔒 **Complete Privacy**: Financial, legal, and personal files stay on your computer.
 - ⚡ **No File Size Limits**: Handles large multi-gigabyte PDFs without timeouts.
