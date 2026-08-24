@@ -26,12 +26,10 @@ if (args.Any(a => a.StartsWith("--split-pages=", StringComparison.Ordinal)))
     var template = args.LastOrDefault(a => !a.StartsWith('-'));
     if (template is not null)
     {
-        var extension = Path.GetExtension(template);
-        var stem = template[..^extension.Length];
-        // Verified against real qpdf: the range is appended to the FULL template name —
-        // a non-.pdf template yields extensionless siblings like ".x.abc123.tmp-1-2".
-        File.WriteAllText(stem + "-1-2", "%PDF-1.4 fake");
-        File.WriteAllText(stem + "-3-4", "%PDF-1.4 fake");
+        // Verified against real qpdf: the range is appended to the ENTIRE template
+        // path — ".x.abc123.tmp" yields extensionless ".x.abc123.tmp-1-2" siblings.
+        File.WriteAllText(template + "-1-2", "%PDF-1.4 fake");
+        File.WriteAllText(template + "-3-4", "%PDF-1.4 fake");
     }
 
     return fakeExit;

@@ -93,9 +93,10 @@ public static partial class QpdfOperationService
         }
     }
 
-    // Verified empirically: --split-pages=N names outputs <stem>-<first>-<last>.pdf as
-    // SIBLINGS of the given output path (e.g. sp.pdf -> sp-1-2.pdf). Single-output ops
-    // produce exactly the temp file. Both shapes share the temp filename's stem prefix.
+    // Verified empirically: --split-pages=N appends "-<first>-<last>" to the ENTIRE
+    // output path given (sp.pdf -> sp-1-2.pdf; ".x.abc.tmp" -> ".x.abc.tmp-1-2").
+    // Single-output ops produce exactly the temp file. All shapes share the temp
+    // filename as a prefix, which is how produced files are discovered below.
     private static bool TargetFilesExist(string temporaryOutputPath) =>
         TempOutputMatches(temporaryOutputPath).Any();
 
@@ -110,12 +111,15 @@ public static partial class QpdfOperationService
 
         var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(targetPath))!;
         var targetStem = Path.GetFileNameWithoutExtension(targetPath);
-        var stemLength = Path.GetFileNameWithoutExtension(temporaryOutputPath).Length;
+        // Anchor at the FULL temp filename (including its .tmp extension): real qpdf
+        // appends "-N-M" to the entire given path (".x.abc.tmp" -> ".x.abc.tmp-1-2"),
+        // so the suffix is "-1-2" and destinations become "<targetStem>-1-2<targetExt>".
+        var stemLength = Path.GetFileName(temporaryOutputPath).Length;
         var moves = new List<(string Source, string Destination)>(matches.Count);
         foreach (var produced in matches)
         {
             var fileName = Path.GetFileName(produced);
-            var relative = Path.GetFileNameWithoutExtension(fileName[stemLength..]);
+            var relative = fileName[stemLength..];
             var destination = Path.Combine(targetDirectory, targetStem + relative + Path.GetExtension(targetPath));
             if (!allowOverwrite && File.Exists(destination))
             {
@@ -168,7 +172,8 @@ public static partial class QpdfOperationService
 
     public static string FriendlyError(string details)
     {
-        if (details.Contains("Refusing to overwrite existing split output", StringComparison.Ordinal))
+        if (details.Contains("Refusing to overwrite existing split output", StringComparison.Ordinal) ||
+            details.Contains("Cannot create a file when that file already exists", StringComparison.Ordinal))
         {
             return "Split files with those names already exist in that folder. " +
                    "Choose a different file-name start or folder, or delete the previous results.";
