@@ -73,5 +73,9 @@ public partial class SplitViewModel : ObservableObject, IBusyPage
 
     partial void OnIsBusyChanged(bool value) => BusyStateChanged?.Invoke(this, EventArgs.Empty);
 
+    public string PagesUnit => PagesPerFile == 1 ? "page" : "pages";
+
+    partial void OnPagesPerFileChanged(int value) => OnPropertyChanged(nameof(PagesUnit));
+
     public void OnShellClosing() => RunCommand.Cancel();
 }

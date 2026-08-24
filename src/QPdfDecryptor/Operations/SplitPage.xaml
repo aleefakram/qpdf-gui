@@ -25,20 +25,19 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="SPLIT EVERY" FontSize="12" FontWeight="SemiBold"
-                       Foreground="{StaticResource MutedInkBrush}" Margin="0,20,0,6" />
-            <StackPanel Orientation="Horizontal">
+            <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                <TextBlock Text="Split every" FontSize="14" VerticalAlignment="Center" Margin="0,0,12,0" />
                 <Button Width="40" Height="36" Click="FewerPages_Click"
                         AutomationProperties.Name="Fewer pages per file">
                     <TextBlock Text="&#xE949;" FontFamily="Segoe Fluent Icons" FontSize="13" />
                 </Button>
                 <TextBlock Text="{Binding PagesPerFile}" MinWidth="52" TextAlignment="Center"
-                           VerticalAlignment="Center" Margin="8,0" FontSize="15" />
+                           VerticalAlignment="Center" Margin="8,0" FontSize="15" FontWeight="SemiBold" />
                 <Button Width="40" Height="36" Click="MorePages_Click"
                         AutomationProperties.Name="More pages per file">
                     <TextBlock Text="&#xE710;" FontFamily="Segoe Fluent Icons" FontSize="13" />
                 </Button>
-                <TextBlock Text="pages" VerticalAlignment="Center" Margin="8,0,0,0"
+                <TextBlock Text="{Binding PagesUnit}" VerticalAlignment="Center" Margin="12,0,0,0"
                            Foreground="{StaticResource MutedInkBrush}" />
             </StackPanel>
             <TextBlock x:Name="EstimateHint" FontSize="12" Foreground="{StaticResource MutedInkBrush}"
