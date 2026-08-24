@@ -7,7 +7,9 @@ namespace QPdfDecryptor;
 
 public partial class MainWindow : Window
 {
-    private OperationInfo currentInfo = OperationCatalog.Find("decrypt");
+    // Null until the first navigation; pre-seeding it with Decrypt would make the
+    // constructor's selection look like a "no change" and skip rendering the page.
+    private OperationInfo? currentInfo;
 
     public MainWindow()
     {
