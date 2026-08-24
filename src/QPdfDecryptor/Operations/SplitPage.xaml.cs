@@ -120,12 +120,22 @@ public partial class SplitPage : UserControl, IBusyPage
             return;
         }
 
-        var files = (int)Math.Ceiling(count / (double)viewModel.PagesPerFile);
+        var perFile = viewModel.PagesPerFile;
+        var files = (int)Math.Ceiling(count / (double)perFile);
         var stem = viewModel.OutputStem.Trim();
+
+        // Show up to three real output names — concrete examples beat range placeholders.
+        var samples = new List<string>();
+        for (var part = 1; part <= Math.Min(files, 3); part++)
+        {
+            var first = (part - 1) * perFile + 1;
+            var last = Math.Min(part * perFile, count);
+            samples.Add($"{stem}-{first}-{last}.pdf");
+        }
+
         EstimateHint.Text = files == 1
-            ? "Produces 1 file."
-            : $"Produces about {files} files named {stem}-<first>-<last>.pdf " +
-              $"(for example {stem}-1-{Math.Min(viewModel.PagesPerFile, count)}.pdf).";
+            ? $"Produces 1 file: {samples[0]}"
+            : $"Produces about {files} files: {string.Join(", ", samples)}{(files > 3 ? ", …" : "")}";
     }
 
     private async void Run_Click(object sender, RoutedEventArgs e)
