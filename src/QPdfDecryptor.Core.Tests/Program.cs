@@ -1009,12 +1009,16 @@ static Task CompressBuildsArguments()
 {
     IQpdfFileOperation linearized = new CompressRequest("q.exe", "in.pdf", true, "o.pdf");
     AssertArgs(linearized.BuildArguments("t"),
-        "--compress-streams=y", "--recompress-flate", "--object-streams=generate",
-        "--decode-level=generalized", "--linearize", "in.pdf", "t");
-    IQpdfFileOperation plain = new CompressRequest("q.exe", "in.pdf", false, "o.pdf");
+        "--compress-streams=y", "--recompress-flate", "--compression-level=9",
+        "--object-streams=generate", "--decode-level=generalized", "--optimize-images",
+        "--externalize-inline-images", "--ii-min-bytes=1024", "--jpeg-quality=75",
+        "--linearize", "in.pdf", "t");
+    IQpdfFileOperation plain = new CompressRequest("q.exe", "in.pdf", false, "o.pdf", 50);
     AssertArgs(plain.BuildArguments("t"),
-        "--compress-streams=y", "--recompress-flate", "--object-streams=generate",
-        "--decode-level=generalized", "in.pdf", "t");
+        "--compress-streams=y", "--recompress-flate", "--compression-level=9",
+        "--object-streams=generate", "--decode-level=generalized", "--optimize-images",
+        "--externalize-inline-images", "--ii-min-bytes=1024", "--jpeg-quality=50",
+        "in.pdf", "t");
     return Task.CompletedTask;
 }
 

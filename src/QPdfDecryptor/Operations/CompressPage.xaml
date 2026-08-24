@@ -23,11 +23,22 @@
                 </StackPanel>
             </Border>
 
-            <CheckBox Content="Optimize for web (faster first-page loading)"
-                      IsChecked="{Binding LinearizeForWeb}" Margin="0,20,0,0" />
-            <TextBlock Text="Restructures and recompresses the file. Photos and scanned images won't shrink much &#x2014; this works best on text-heavy PDFs."
+            <TextBlock Text="IMAGE QUALITY" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{StaticResource MutedInkBrush}" Margin="0,20,0,6" />
+            <StackPanel Orientation="Horizontal">
+                <ComboBox x:Name="QualityPicker" SelectedIndex="1" MinWidth="180"
+                          SelectionChanged="QualityPicker_SelectionChanged">
+                    <ComboBoxItem Content="Best quality (larger file)" Tag="90" />
+                    <ComboBoxItem Content="Balanced" Tag="75" />
+                    <ComboBoxItem Content="Smallest file (lower quality)" Tag="50" />
+                </ComboBox>
+            </StackPanel>
+            <TextBlock Text="Photos and scanned pages are re-encoded as JPEG at this quality. Text stays sharp; only images soften."
                        FontSize="12" Foreground="{StaticResource MutedInkBrush}" Margin="0,4,0,0"
                        TextWrapping="Wrap" />
+
+            <CheckBox Content="Optimize for web (faster first-page loading)"
+                      IsChecked="{Binding LinearizeForWeb}" Margin="0,20,0,0" />
 
             <TextBlock Text="SAVE COMPRESSED PDF AS" FontSize="12" FontWeight="SemiBold"
                        Foreground="{StaticResource MutedInkBrush}" Margin="0,20,0,6" />

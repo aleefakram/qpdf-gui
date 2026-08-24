@@ -26,6 +26,11 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
     [NotifyCanExecuteChangedFor(nameof(RunCommand))]
     private bool linearizeForWeb = true;
 
+    // JPEG quality for image re-encoding: 90 best, 75 balanced, 50 smallest.
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RunCommand))]
+    private int imageQualityPercent = 75;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RunCommand))]
     private bool isBusy;
@@ -44,7 +49,7 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
     public long InputBytes { get; set; }
 
     public CompressRequest CreateRequest(string qpdfPath) =>
-        new(qpdfPath, InputPath, LinearizeForWeb, OutputPath);
+        new(qpdfPath, InputPath, LinearizeForWeb, OutputPath, ImageQualityPercent);
 
     private bool CanRun() =>
         !IsBusy && InputPath.Trim().Length > 0 && OutputPath.Trim().Length > 0;

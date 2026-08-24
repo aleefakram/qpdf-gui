@@ -164,13 +164,19 @@ public sealed record CompressRequest(
     string QpdfPath,
     string InputPath,
     bool LinearizeForWeb,
-    string OutputPath) : IQpdfFileOperation
+    string OutputPath,
+    int JpegQuality = 75) : IQpdfFileOperation // 1-100; drives image re-encoding
 {
     public void Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(QpdfPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(InputPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(OutputPath);
+        if (JpegQuality is < 1 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(JpegQuality));
+        }
+
         if (Path.GetFullPath(InputPath).Equals(
                 Path.GetFullPath(OutputPath),
                 StringComparison.OrdinalIgnoreCase))
@@ -185,8 +191,13 @@ public sealed record CompressRequest(
         {
             "--compress-streams=y",
             "--recompress-flate",
+            "--compression-level=9",
             "--object-streams=generate",
             "--decode-level=generalized",
+            "--optimize-images",
+            "--externalize-inline-images",
+            "--ii-min-bytes=1024",
+            $"--jpeg-quality={JpegQuality}",
         };
         if (LinearizeForWeb)
         {

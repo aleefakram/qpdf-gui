@@ -62,21 +62,41 @@ public partial class CompressPage : UserControl, IBusyPage
 
         if (outcome.Succeeded)
         {
-            var savedMessage = $"Saved {viewModel.OutputPath}";
-            if (viewModel.InputBytes > 0 && outcome.OutputBytes is long outputBytes)
-            {
-                var beforeMb = viewModel.InputBytes / BytesPerMegabyte;
-                var afterMb = outputBytes / BytesPerMegabyte;
-                savedMessage = $"Saved {viewModel.OutputPath} ({beforeMb:N1} MB \u2192 {afterMb:N1} MB)";
-            }
-
             Status.ShowSuccess(outcome.HasWarnings,
                 outcome.HasWarnings ? "Compressed with warnings" : "PDF compressed",
-                savedMessage, outcome.Details);
+                BuildSuccessMessage(outcome), outcome.Details);
         }
         else
         {
             Status.ShowFailure("Could not compress", outcome.FriendlyError, outcome.Details);
+        }
+    }
+
+    private string BuildSuccessMessage(OperationOutcome outcome)
+    {
+        var saved = $"Saved {viewModel.OutputPath}";
+        if (viewModel.InputBytes <= 0 || outcome.OutputBytes is not long outputBytes)
+        {
+            return saved;
+        }
+
+        var beforeMb = viewModel.InputBytes / BytesPerMegabyte;
+        var afterMb = outputBytes / BytesPerMegabyte;
+        var sizes = $"{beforeMb:N1} MB \u2192 {afterMb:N1} MB";
+        var savedPercent = 100.0 * (1 - outputBytes / (double)viewModel.InputBytes);
+
+        // Under 5% smaller: say so plainly instead of celebrating a no-op.
+        return savedPercent < 5
+            ? $"{sizes}. This PDF was already well compressed \u2014 only {savedPercent:N0}% smaller."
+            : $"{saved} ({sizes}, {savedPercent:N0}% smaller)";
+    }
+
+    private void QualityPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (QualityPicker.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            int.TryParse(tag, out var quality))
+        {
+            viewModel.ImageQualityPercent = quality;
         }
     }
 
