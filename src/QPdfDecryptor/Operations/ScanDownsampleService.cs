@@ -13,7 +13,7 @@ namespace QPdfDecryptor.Operations;
 // pair in a top-level page content stream. Skipped (left untouched):
 // monochrome masks, soft-masked images, inline images, form-nested images,
 // non-RGB/gray decodes, and images too small to matter.
-internal sealed record DownsampleResult(bool Applied, string? QdfPath, int ImagesDownsampled);
+internal sealed record DownsampleResult(bool Applied, string? QdfPath, int ImagesDownsampled, int ImagesConsidered);
 
 internal static class ScanDownsampleService
 {
@@ -79,9 +79,9 @@ internal static class ScanDownsampleService
 
             var modified = await Task.Run(() =>
                 TryDownsampleQdf(qdfPath, maxDpi, jpegQuality, progress, cancellationToken), cancellationToken);
-            if (modified == 0)
+            if (modified.ImagesDownsampled == 0)
             {
-                return new DownsampleResult(false, null, 0);
+                return new DownsampleResult(false, null, 0, modified.ImagesConsidered);
             }
 
             var checkStart = QpdfProcessRunner.CreateStartInfo(qpdfPath);
@@ -92,10 +92,10 @@ internal static class ScanDownsampleService
             {
                 // Splice produced something qpdf rejects: abandon quietly, the normal
                 // compress pass still runs on the original input.
-                return new DownsampleResult(false, null, 0);
+                return new DownsampleResult(false, null, 0, modified.ImagesConsidered);
             }
 
-            var result = new DownsampleResult(true, qdfPath, modified);
+            var result = new DownsampleResult(true, qdfPath, modified.ImagesDownsampled, modified.ImagesConsidered);
             qdfPath = string.Empty; // ownership moves to the caller, which deletes it
             return result;
         }
@@ -132,8 +132,8 @@ internal static class ScanDownsampleService
         }
     }
 
-    // Returns the number of images rewritten. Mutates the QDF file in place.
-    internal static int TryDownsampleQdf(
+    // Returns per-run counts. Mutates the QDF file in place.
+    internal static DownsampleCounts TryDownsampleQdf(
         string qdfPath,
         int maxDpi,
         int jpegQuality,
@@ -145,13 +145,13 @@ internal static class ScanDownsampleService
         var objects = ParseObjects(text);
         if (objects.Count == 0)
         {
-            return 0;
+            return new DownsampleCounts(0, 0);
         }
 
         var targets = FindDownsampleTargets(objects, text, maxDpi);
         if (targets.Count == 0)
         {
-            return 0;
+            return new DownsampleCounts(0, CountImageObjects(objects, text));
         }
 
         var replacements = new List<ImageReplacement>(targets.Count);
@@ -174,11 +174,27 @@ internal static class ScanDownsampleService
 
         if (replacements.Count == 0)
         {
-            return 0;
+            return new DownsampleCounts(0, targets.Count);
         }
 
         File.WriteAllBytes(qdfPath, SpliceImages(bytes, text, objects, replacements));
-        return replacements.Count;
+        return new DownsampleCounts(replacements.Count, targets.Count);
+    }
+
+    internal sealed record DownsampleCounts(int ImagesDownsampled, int ImagesConsidered);
+
+    internal static int CountImageObjects(Dictionary<int, QdfObject> objects, string text)
+    {
+        var count = 0;
+        foreach (var obj in objects.Values)
+        {
+            if (obj.HasStream && IsImageDict(text.Substring(obj.DictOffset, obj.DictLength), out _, out _))
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     internal sealed record QdfObject(int Number, int DictOffset, int DictLength,
@@ -407,7 +423,7 @@ internal static class ScanDownsampleService
                 continue;
             }
 
-            var xobjects = ExtractXObjectMap(dictText);
+            var xobjects = FindXObjectMap(dictText, objects, text);
             if (xobjects.Count == 0)
             {
                 continue;
@@ -474,6 +490,60 @@ internal static class ScanDownsampleService
         }
 
         return targets;
+    }
+
+    // Real-world PDFs usually keep /Resources (and sometimes the /XObject map
+    // itself) in indirect objects; v1 only handled the fully-inline shape.
+    internal static Dictionary<string, int> FindXObjectMap(string pageDictText,
+        Dictionary<int, QdfObject> objects, string text)
+    {
+        var inline = ExtractXObjectMap(pageDictText);
+        if (inline.Count > 0)
+        {
+            return inline;
+        }
+
+        var resources = ResolveReferenceDict(pageDictText, "Resources", objects, text);
+        if (resources is not null)
+        {
+            var fromResources = ExtractXObjectMap(resources);
+            if (fromResources.Count > 0)
+            {
+                return fromResources;
+            }
+
+            var indirectMap = ResolveReferenceDict(resources, "XObject", objects, text);
+            if (indirectMap is not null)
+            {
+                return ParseXObjectEntries(indirectMap);
+            }
+        }
+
+        var directMap = ResolveReferenceDict(pageDictText, "XObject", objects, text);
+        return directMap is not null ? ParseXObjectEntries(directMap) : inline;
+    }
+
+    internal static string? ResolveReferenceDict(string dictText, string key,
+        Dictionary<int, QdfObject> objects, string text)
+    {
+        var match = Regex.Match(dictText, $@"/{key}\s+(\d+)\s+\d+\s+R");
+        if (!match.Success || !objects.TryGetValue(int.Parse(match.Groups[1].Value), out var target))
+        {
+            return null;
+        }
+
+        return text.Substring(target.DictOffset, target.DictLength);
+    }
+
+    internal static Dictionary<string, int> ParseXObjectEntries(string mapDictText)
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (Match entry in XObjectEntryPattern.Matches(mapDictText))
+        {
+            map[entry.Groups[1].Value] = int.Parse(entry.Groups[2].Value);
+        }
+
+        return map;
     }
 
     internal static Dictionary<string, int> ExtractXObjectMap(string pageDictText)

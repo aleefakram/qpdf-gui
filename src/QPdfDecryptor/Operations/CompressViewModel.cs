@@ -51,6 +51,9 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
     private bool isDownsampling;
 
     [ObservableProperty]
+    private string downsampleNote = string.Empty;
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RunCommand))]
     private bool isBusy;
 
@@ -78,6 +81,7 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
     {
         Outcome = null;
         StatusPercent = 0;
+        DownsampleNote = string.Empty;
         IsBusy = true;
         string? downsampled = null;
         try
@@ -95,6 +99,17 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
                     {
                         inputPath = step.QdfPath;
                         downsampled = step.QdfPath;
+                        DownsampleNote = $"Downsampled {step.ImagesDownsampled} scan " +
+                            $"image{(step.ImagesDownsampled == 1 ? string.Empty : "s")} to {MaxResolutionDpi} DPI first.";
+                    }
+                    else if (step.ImagesConsidered > 0)
+                    {
+                        DownsampleNote = "Scans found but already at or below " +
+                            $"{MaxResolutionDpi} DPI — compressed without downsampling.";
+                    }
+                    else
+                    {
+                        DownsampleNote = "No large scans found — compressed without downsampling.";
                     }
                 }
                 finally

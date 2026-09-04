@@ -87,11 +87,12 @@ public partial class CompressPage : UserControl, IBusyPage
         var afterMb = outputBytes / BytesPerMegabyte;
         var sizes = $"{beforeMb:N1} MB \u2192 {afterMb:N1} MB";
         var savedPercent = 100.0 * (1 - outputBytes / (double)viewModel.InputBytes);
+        var note = viewModel.DownsampleNote.Length > 0 ? $" {viewModel.DownsampleNote}" : string.Empty;
 
         // Under 5% smaller: say so plainly instead of celebrating a no-op.
         return savedPercent < 5
-            ? $"{sizes}. This PDF was already well compressed \u2014 only {savedPercent:N0}% smaller."
-            : $"{saved} ({sizes}, {savedPercent:N0}% smaller)";
+            ? $"{sizes}. This PDF was already well compressed \u2014 only {savedPercent:N0}% smaller.{note}"
+            : $"{saved} ({sizes}, {savedPercent:N0}% smaller).{note}";
     }
 
     private void QualityPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)

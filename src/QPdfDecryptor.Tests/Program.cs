@@ -28,6 +28,8 @@ public static class Program
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
             ("Compress pre-pass feeds downsampled path into run", CompressPrePassFeedsDownsampledPath),
             ("Compress skips pre-pass when resolution is Original", CompressSkipsPrePassWhenOriginal),
+            ("Downsample resolves indirect Resources maps", DownsampleResolvesIndirectResources),
+            ("Compress reports note when nothing qualified", CompressNoteWhenNothingQualified),
         };
 
         foreach (var test in tests)
@@ -290,7 +292,7 @@ public static class Program
             (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
             {
                 Assert(inputPath == "in.pdf" && maxDpi == 150 && jpegQuality == 75, "pre-pass got wrong inputs");
-                return Task.FromResult(new Operations.DownsampleResult(true, fakeQdf, 1));
+                return Task.FromResult(new Operations.DownsampleResult(true, fakeQdf, 1, 1));
             });
         vm.InputPath = "in.pdf";
         vm.OutputPath = "o.pdf";
@@ -298,6 +300,7 @@ public static class Program
         await vm.RunCommand.ExecuteAsync(null);
         Assert(seen is not null && seen.InputPath == fakeQdf, "run must use the downsampled file");
         Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
+        Assert(vm.DownsampleNote.Contains("Downsampled 1 scan image"), $"note missing: {vm.DownsampleNote}");
     }
 
     private static async Task CompressSkipsPrePassWhenOriginal()
@@ -309,13 +312,54 @@ public static class Program
             (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
             {
                 prePassCalled = true;
-                return Task.FromResult(new Operations.DownsampleResult(false, null, 0));
+                return Task.FromResult(new Operations.DownsampleResult(false, null, 0, 0));
             });
         vm.InputPath = "in.pdf";
         vm.OutputPath = "o.pdf";
         Assert(vm.MaxResolutionDpi == 0, "default must be Original");
         await vm.RunCommand.ExecuteAsync(null);
         Assert(!prePassCalled, "pre-pass must not run when resolution is Original");
+    }
+
+    private static Task DownsampleResolvesIndirectResources()
+    {
+        // Real-world shape: /Resources lives in its own object, XObject map inline there.
+        const string qdf =
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources 7 0 R >>\nendobj\n" +
+            "4 0 obj\n<< /Length 30 >>\nstream\nq 612 0 0 792 0 0 cm /Im1 Do Q\nendstream\nendobj\n" +
+            "5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 /ColorSpace /DeviceRGB " +
+            "/BitsPerComponent 8 /Filter /DCTDecode /Length 4 >>\nstream\nÿØAAAA\nendstream\nendobj\n" +
+            "7 0 obj\n<< /XObject << /Im1 5 0 R >> >>\nendobj\n";
+        var objects = Operations.ScanDownsampleService.ParseObjects(qdf);
+        var targets = Operations.ScanDownsampleService.FindDownsampleTargets(objects, qdf, 100);
+        Assert(targets.Count == 1 && targets.ContainsKey(5), "indirect Resources must resolve to image 5");
+
+        // Fully indirect shape: the XObject map itself is a separate object.
+        const string qdf2 =
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources 7 0 R >>\nendobj\n" +
+            "4 0 obj\n<< /Length 30 >>\nstream\nq 612 0 0 792 0 0 cm /Im1 Do Q\nendstream\nendobj\n" +
+            "5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 /ColorSpace /DeviceRGB " +
+            "/BitsPerComponent 8 /Filter /DCTDecode /Length 4 >>\nstream\nÿØAAAA\nendstream\nendobj\n" +
+            "7 0 obj\n<< /XObject 8 0 R >>\nendobj\n" +
+            "8 0 obj\n<< /Im1 5 0 R >>\nendobj\n";
+        var objects2 = Operations.ScanDownsampleService.ParseObjects(qdf2);
+        var targets2 = Operations.ScanDownsampleService.FindDownsampleTargets(objects2, qdf2, 100);
+        Assert(targets2.Count == 1 && targets2.ContainsKey(5), "indirect XObject map must resolve to image 5");
+        return Task.CompletedTask;
+    }
+
+    private static async Task CompressNoteWhenNothingQualified()
+    {
+        var vm = new Operations.CompressViewModel(
+            (request, allowOverwrite, progress, cancellationToken) =>
+                Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok")),
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+                Task.FromResult(new Operations.DownsampleResult(false, null, 0, 0)));
+        vm.InputPath = "in.pdf";
+        vm.OutputPath = "o.pdf";
+        vm.MaxResolutionDpi = 150;
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert(vm.DownsampleNote.Contains("No large scans found"), $"note missing: {vm.DownsampleNote}");
     }
 
     private static string? FindRepoQpdf()
