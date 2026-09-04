@@ -70,9 +70,6 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
 
     public long InputBytes { get; set; }
 
-    public CompressRequest CreateRequest(string qpdfPath) =>
-        new(qpdfPath, InputPath, LinearizeForWeb, OutputPath, ImageQualityPercent);
-
     private bool CanRun() =>
         !IsBusy && InputPath.Trim().Length > 0 && OutputPath.Trim().Length > 0;
 
@@ -93,23 +90,32 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
                 try
                 {
                     var progress = new Progress<int>(value => StatusPercent = value);
-                    var step = await downsample(QpdfLocator.Path, InputPath,
-                        MaxResolutionDpi, ImageQualityPercent, progress, cancellationToken);
-                    if (step.Applied && step.QdfPath is not null)
+                    try
                     {
-                        inputPath = step.QdfPath;
-                        downsampled = step.QdfPath;
-                        DownsampleNote = $"Downsampled {step.ImagesDownsampled} scan " +
-                            $"image{(step.ImagesDownsampled == 1 ? string.Empty : "s")} to {MaxResolutionDpi} DPI first.";
+                        var step = await downsample(QpdfLocator.Path, InputPath,
+                            MaxResolutionDpi, ImageQualityPercent, progress, cancellationToken);
+                        if (step.Applied && step.QdfPath is not null)
+                        {
+                            inputPath = step.QdfPath;
+                            downsampled = step.QdfPath;
+                            DownsampleNote = $"Downsampled {step.ImagesDownsampled} scan " +
+                                $"image{(step.ImagesDownsampled == 1 ? string.Empty : "s")} to {MaxResolutionDpi} DPI first.";
+                        }
+                        else if (step.ImagesConsidered > 0)
+                        {
+                            DownsampleNote = "Scans found but already at or below " +
+                                $"{MaxResolutionDpi} DPI — compressed without downsampling.";
+                        }
+                        else
+                        {
+                            DownsampleNote = "No large scans found — compressed without downsampling.";
+                        }
                     }
-                    else if (step.ImagesConsidered > 0)
+                    catch (InvalidOperationException)
                     {
-                        DownsampleNote = "Scans found but already at or below " +
-                            $"{MaxResolutionDpi} DPI — compressed without downsampling.";
-                    }
-                    else
-                    {
-                        DownsampleNote = "No large scans found — compressed without downsampling.";
+                        // Unreadable or encrypted input: skip the pre-pass and let the
+                        // main pipeline refuse it with the standard friendly message
+                        // (surfacing as an Outcome, never as an exception).
                     }
                 }
                 finally

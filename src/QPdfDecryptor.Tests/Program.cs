@@ -30,6 +30,7 @@ public static class Program
             ("Compress skips pre-pass when resolution is Original", CompressSkipsPrePassWhenOriginal),
             ("Downsample resolves indirect Resources maps", DownsampleResolvesIndirectResources),
             ("Compress reports note when nothing qualified", CompressNoteWhenNothingQualified),
+            ("Compress pre-pass refusal falls through to main run", CompressPrePassRefusalFallsThrough),
         };
 
         foreach (var test in tests)
@@ -360,6 +361,28 @@ public static class Program
         vm.MaxResolutionDpi = 150;
         await vm.RunCommand.ExecuteAsync(null);
         Assert(vm.DownsampleNote.Contains("No large scans found"), $"note missing: {vm.DownsampleNote}");
+    }
+
+    private static async Task CompressPrePassRefusalFallsThrough()
+    {
+        CompressRequest? seen = null;
+        var vm = new Operations.CompressViewModel(
+            (request, allowOverwrite, progress, cancellationToken) =>
+            {
+                seen = request;
+                return Task.FromResult(new OperationOutcome(false, false, null,
+                    "This PDF is password-protected. Use Decrypt first.", "probe refused"));
+            },
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+                Task.FromException<Operations.DownsampleResult>(
+                    new InvalidOperationException("This PDF is password-protected. Use Decrypt first.")));
+        vm.InputPath = "in.pdf";
+        vm.OutputPath = "o.pdf";
+        vm.MaxResolutionDpi = 150;
+        await vm.RunCommand.ExecuteAsync(null); // must not throw: refusal surfaces as Outcome
+        Assert(seen is not null && seen.InputPath == "in.pdf", "main run must get the original input");
+        Assert(vm.Outcome?.FriendlyError.Contains("password-protected") == true, "refusal must surface");
+        Assert(!vm.IsBusy && !vm.IsDownsampling, "busy flags cleared");
     }
 
     private static string? FindRepoQpdf()
