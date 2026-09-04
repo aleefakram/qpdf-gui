@@ -1,4 +1,5 @@
 using QPdfDecryptor.Core;
+using System.IO;
 
 namespace QPdfDecryptor;
 
@@ -18,6 +19,15 @@ public static class Program
             ("Organize gating requires non-empty valid ranges", OrganizeGating),
             ("Compress defaults linearize on and gates on paths", CompressGating),
             ("Watermark placement flag maps overlay and underlay", WatermarkGating),
+            ("Downsample parses cm-Do draws", DownsampleDrawsParse),
+            ("Downsample effective DPI math", DownsampleEffectiveDpi),
+            ("Downsample image dict filter skips masks", DownsampleImageDictFilter),
+            ("Downsample targets flag oversized scans", DownsampleTargetsFlagOversized),
+            ("Downsample targets skip content under the cap", DownsampleTargetsSkipWhenUnderCap),
+            ("Downsample rewrite dict updates dimensions", DownsampleRewriteDict),
+            ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
+            ("Compress pre-pass feeds downsampled path into run", CompressPrePassFeedsDownsampledPath),
+            ("Compress skips pre-pass when resolution is Original", CompressSkipsPrePassWhenOriginal),
         };
 
         foreach (var test in tests)
@@ -140,5 +150,255 @@ public static class Program
     private static void Assert(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
+    }
+
+    private static Task DownsampleDrawsParse()
+    {
+        var draws = Operations.ScanDownsampleService.ParseContentDraws("q 612 0 0 792 0 0 cm /Im1 Do Q");
+        Assert(draws.Count == 1, $"expected 1 draw, got {draws.Count}");
+        Assert(draws[0].Name == "Im1", "wrong image name");
+        Assert(Math.Abs(draws[0].A - 612) < 0.001 && Math.Abs(draws[0].D - 792) < 0.001, "wrong matrix");
+        var split = Operations.ScanDownsampleService.ParseContentDraws("q\n612 0 0 792 0 0 cm\n/Im1 Do\nQ");
+        Assert(split.Count == 1, "split-line draw missed");
+        var bare = Operations.ScanDownsampleService.ParseContentDraws("q /Im1 Do Q");
+        Assert(bare.Count == 0, "bare Do without cm must be ignored");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleEffectiveDpi()
+    {
+        var dpi = Operations.ScanDownsampleService.EffectiveDpi(1200, 612);
+        Assert(Math.Abs(dpi - 141.18) < 0.01, $"wrong dpi: {dpi}");
+        Assert(Operations.ScanDownsampleService.EffectiveDpi(100, 0) == 0, "zero-size must yield 0");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleImageDictFilter()
+    {
+        const string rgb = "<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 "
+            + "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length 10 >>";
+        Assert(Operations.ScanDownsampleService.IsImageDict(rgb, out var w, out var h) && w == 1200 && h == 1500,
+            "rgb image must qualify");
+        const string mask = "<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 /ImageMask true /Length 10 >>";
+        Assert(!Operations.ScanDownsampleService.IsImageDict(mask, out _, out _), "mask must be skipped");
+        const string smask = "<< /Type /XObject /Subtype /Image /Width 500 /Height 500 /SMask 9 0 R /Length 10 >>";
+        Assert(!Operations.ScanDownsampleService.IsImageDict(smask, out _, out _), "soft mask must be skipped");
+        return Task.CompletedTask;
+    }
+
+    private const string SyntheticQdf =
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R " +
+        "/Resources << /XObject << /Im1 5 0 R >> >> >>\nendobj\n" +
+        "4 0 obj\n<< /Length 30 >>\nstream\nq 612 0 0 792 0 0 cm /Im1 Do Q\nendstream\nendobj\n" +
+        "5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 /ColorSpace /DeviceRGB " +
+        "/BitsPerComponent 8 /Filter /DCTDecode /Length 6 0 R >>\nstream\nÿØAAAA\nendstream\nendobj\n" +
+        "6 0 obj\n4\nendobj\n";
+
+    private static Task DownsampleTargetsFlagOversized()
+    {
+        var objects = Operations.ScanDownsampleService.ParseObjects(SyntheticQdf);
+        Assert(objects.Count == 5, $"expected 5 parsed objects (bare length ref excluded), got {objects.Count}");
+        var targets = Operations.ScanDownsampleService.FindDownsampleTargets(objects, SyntheticQdf, 100);
+        Assert(targets.Count == 1 && targets.ContainsKey(5), "image 5 must be targeted at 100 DPI cap");
+        Assert(targets[5].Width == 849 && targets[5].Height == 1062,
+            $"wrong target size: {targets[5].Width}x{targets[5].Height}");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleTargetsSkipWhenUnderCap()
+    {
+        var objects = Operations.ScanDownsampleService.ParseObjects(SyntheticQdf);
+        var targets = Operations.ScanDownsampleService.FindDownsampleTargets(objects, SyntheticQdf, 150);
+        Assert(targets.Count == 0, "141 DPI scan must be untouched at 150 DPI cap");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleRewriteDict()
+    {
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 "
+            + "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length 7 0 R >>";
+        var rewritten = Operations.ScanDownsampleService.RewriteImageDict(dict,
+            new Operations.ScanDownsampleService.ImageReplacement(5, new byte[10], 600, 750, false));
+        Assert(rewritten.Contains("/Width 600") && rewritten.Contains("/Height 750"), "dims not updated");
+        Assert(rewritten.Contains("/Length 10"), "length not direct");
+        Assert(rewritten.Contains("/Filter /DCTDecode"), "filter not normalized");
+        return Task.CompletedTask;
+    }
+
+    private static async Task DownsampleEndToEndShrinksScan()
+    {
+        var qpdf = FindRepoQpdf();
+        if (qpdf is null)
+        {
+            Console.WriteLine("SKIP qpdf.exe not found under repo Native/");
+            return;
+        }
+
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            var jpeg = BuildGradientJpeg(1800, 2250, 92);
+            var pdf = Path.Combine(workspace, "scan.pdf");
+            WriteMinimalImagePdf(pdf, jpeg, 1800, 2250);
+
+            var result = await Operations.ScanDownsampleService.DownsampleAsync(
+                qpdf, pdf, 150, 75, null, CancellationToken.None);
+            Assert(result.Applied, "expected the scan to be downsampled");
+            Assert(result.ImagesDownsampled == 1, $"expected 1 image, got {result.ImagesDownsampled}");
+            Assert(result.QdfPath is not null && File.Exists(result.QdfPath), "qdf missing");
+            try
+            {
+                var qdfBytes = await File.ReadAllBytesAsync(result.QdfPath!);
+                var qdfText = System.Text.Encoding.Latin1.GetString(qdfBytes);
+                Assert(qdfText.Contains("/Width 1275") && qdfText.Contains("/Height 1593"),
+                    "expected 1275x1593 target dims in spliced QDF");
+                Assert(qdfBytes.Length < new FileInfo(pdf).Length, "downsampled QDF should already be smaller");
+                var compressed = Path.Combine(workspace, "scan-compressed.pdf");
+                var outcome = await QpdfOperationService.RunAsync(
+                    new CompressRequest(qpdf, result.QdfPath!, false, compressed, 75),
+                    null, CancellationToken.None, true);
+                Assert(outcome.Succeeded, outcome.Details);
+                var before = new FileInfo(pdf).Length;
+                var after = new FileInfo(compressed).Length;
+                Console.WriteLine($"SIZE {before} -> {after} ({(double)after / before:P0})");
+                Assert((double)after / before < 0.6, $"expected <60% of original, got {after} of {before}");
+            }
+            finally
+            {
+                Operations.ScanDownsampleService.DeleteWorkspaceFor(result.QdfPath!);
+            }
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    private static async Task CompressPrePassFeedsDownsampledPath()
+    {
+        CompressRequest? seen = null;
+        var fakeQdf = Path.Combine(Path.GetTempPath(), "fake-downsampled.qdf");
+        var vm = new Operations.CompressViewModel(
+            (request, allowOverwrite, progress, cancellationToken) =>
+            {
+                seen = request;
+                return Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok"));
+            },
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+            {
+                Assert(inputPath == "in.pdf" && maxDpi == 150 && jpegQuality == 75, "pre-pass got wrong inputs");
+                return Task.FromResult(new Operations.DownsampleResult(true, fakeQdf, 1));
+            });
+        vm.InputPath = "in.pdf";
+        vm.OutputPath = "o.pdf";
+        vm.MaxResolutionDpi = 150;
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert(seen is not null && seen.InputPath == fakeQdf, "run must use the downsampled file");
+        Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
+    }
+
+    private static async Task CompressSkipsPrePassWhenOriginal()
+    {
+        var prePassCalled = false;
+        var vm = new Operations.CompressViewModel(
+            (request, allowOverwrite, progress, cancellationToken) =>
+                Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok")),
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+            {
+                prePassCalled = true;
+                return Task.FromResult(new Operations.DownsampleResult(false, null, 0));
+            });
+        vm.InputPath = "in.pdf";
+        vm.OutputPath = "o.pdf";
+        Assert(vm.MaxResolutionDpi == 0, "default must be Original");
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert(!prePassCalled, "pre-pass must not run when resolution is Original");
+    }
+
+    private static string? FindRepoQpdf()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var depth = 0; depth < 8 && directory is not null; depth++, directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "src", "QPdfDecryptor", "Native", "qpdf.exe");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static byte[] BuildGradientJpeg(int width, int height, int quality)
+    {
+        var bitmap = new System.Windows.Media.Imaging.WriteableBitmap(
+            width, height, 96, 96, System.Windows.Media.PixelFormats.Bgr24, null);
+        var stride = width * 3;
+        var pixels = new byte[stride * height];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var i = y * stride + x * 3;
+                pixels[i] = (byte)(x * 255 / width);
+                pixels[i + 1] = (byte)(y * 255 / height);
+                pixels[i + 2] = 128;
+            }
+        }
+
+        bitmap.WritePixels(new System.Windows.Int32Rect(0, 0, width, height), pixels, stride, 0);
+        var encoder = new System.Windows.Media.Imaging.JpegBitmapEncoder { QualityLevel = quality };
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return stream.ToArray();
+    }
+
+    private static void WriteMinimalImagePdf(string path, byte[] jpeg, int width, int height)
+    {
+        var latin1 = System.Text.Encoding.Latin1;
+        const string content = "q 612 0 0 792 0 0 cm /Im1 Do Q";
+        var contentBytes = latin1.GetBytes(content);
+        var objects = new[]
+        {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R " +
+                "/Resources << /XObject << /Im1 5 0 R >> >> >>",
+            $"<< /Length {contentBytes.Length} >>\nstream\n{content}\nendstream",
+        };
+        using var file = File.Create(path);
+        void Write(string value)
+        {
+            var encoded = latin1.GetBytes(value);
+            file.Write(encoded, 0, encoded.Length);
+        }
+
+        Write("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        var offsets = new List<long>();
+        for (var i = 0; i < objects.Length; i++)
+        {
+            offsets.Add(file.Position);
+            Write($"{i + 1} 0 obj\n{objects[i]}\nendobj\n");
+        }
+
+        offsets.Add(file.Position);
+        Write($"5 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} " +
+            $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {jpeg.Length} >>\nstream\n");
+        file.Write(jpeg, 0, jpeg.Length);
+        Write("\nendstream\nendobj\n");
+        var xref = file.Position;
+        var count = objects.Length + 2;
+        Write($"xref\n0 {count}\n0000000000 65535 f \n");
+        foreach (var offset in offsets)
+        {
+            Write($"{offset:D10} 00000 n \n");
+        }
+
+        Write($"trailer\n<< /Size {count} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF");
     }
 }

@@ -37,6 +37,21 @@
                        FontSize="12" Foreground="{StaticResource MutedInkBrush}" Margin="0,4,0,0"
                        TextWrapping="Wrap" />
 
+            <TextBlock Text="MAXIMUM RESOLUTION" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{StaticResource MutedInkBrush}" Margin="0,20,0,6" />
+            <StackPanel Orientation="Horizontal">
+                <ComboBox x:Name="ResolutionPicker" SelectedIndex="0" MinWidth="220"
+                          SelectionChanged="ResolutionPicker_SelectionChanged">
+                    <ComboBoxItem Content="Original (no downsampling)" Tag="0" />
+                    <ComboBoxItem Content="300 DPI (safe for print)" Tag="300" />
+                    <ComboBoxItem Content="150 DPI (small, stays readable)" Tag="150" />
+                    <ComboBoxItem Content="100 DPI (tiny, large text only)" Tag="100" />
+                </ComboBox>
+            </StackPanel>
+            <TextBlock Text="Large scans are scaled down to this resolution before compression. Small pictures and masks are left alone."
+                       FontSize="12" Foreground="{StaticResource MutedInkBrush}" Margin="0,4,0,0"
+                       TextWrapping="Wrap" />
+
             <CheckBox Content="Optimize for web (faster first-page loading)"
                       IsChecked="{Binding LinearizeForWeb}" Margin="0,20,0,0" />
 

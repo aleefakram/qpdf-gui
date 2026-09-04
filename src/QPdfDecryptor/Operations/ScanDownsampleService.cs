@@ -1,0 +1,636 @@
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using QPdfDecryptor.Core;
+
+namespace QPdfDecryptor.Operations;
+
+// Phase 1 scan compression: downsample oversized color/gray JPEG images via
+// qpdf QDF surgery, then let the normal compress pipeline run on the result.
+// v1 limits: DCTDecode (JPEG) images only, drawn via a direct "cm ... Do"
+// pair in a top-level page content stream. Skipped (left untouched):
+// monochrome masks, soft-masked images, inline images, form-nested images,
+// non-RGB/gray decodes, and images too small to matter.
+internal sealed record DownsampleResult(bool Applied, string? QdfPath, int ImagesDownsampled);
+
+internal static class ScanDownsampleService
+{
+    private static readonly Encoding Latin1 = Encoding.Latin1;
+
+    private static readonly Regex ObjHeaderPattern = new(@"(\d+)\s+(\d+)\s+obj\b", RegexOptions.Compiled);
+    private static readonly Regex LengthPattern = new(@"/Length\s+(\d+)(?:\s+(\d+)\s+R)?", RegexOptions.Compiled);
+    private static readonly Regex XObjectEntryPattern = new(@"/(\S+)\s+(\d+)\s+\d+\s+R", RegexOptions.Compiled);
+    private static readonly Regex ContentsEntryPattern = new(@"(\d+)\s+\d+\s+R", RegexOptions.Compiled);
+    private static readonly Regex PageTypePattern = new(@"/Type\s*/Page\b", RegexOptions.Compiled);
+    private static readonly Regex ContentsPattern = new(@"/Contents\s*(\[(?:[^\[\]]*)\]|(?:\d+\s+\d+\s+R))",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex DrawPattern = new(
+        @"([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+cm\s*/(\S+?)\s+Do\b",
+        RegexOptions.Compiled);
+    private static readonly Regex FilterPattern = new(@"/Filter\s*(\[[^\]]*\]|/\S+)",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex ColorSpacePattern = new(@"/ColorSpace\s*(\[[^\]]*\]|/\S+)",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex DecodeParmsPattern = new(@"/DecodeParms\s*(\[[^\]]*\]|<<.*?>>)",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private const int MinPixelsToConsider = 400; // decorations and thumbnails stay untouched
+    private const int MinTargetPixels = 8;
+
+    public static async Task<DownsampleResult> DownsampleAsync(
+        string qpdfPath,
+        string inputPath,
+        int maxDpi,
+        int jpegQuality,
+        IProgress<int>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(qpdfPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(inputPath);
+        if (maxDpi <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxDpi));
+        }
+
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-downsample-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        var qdfPath = Path.Combine(workspace, "work.qdf");
+        try
+        {
+            var qdfStart = QpdfProcessRunner.CreateStartInfo(qpdfPath);
+            qdfStart.ArgumentList.Add("--qdf");
+            qdfStart.ArgumentList.Add("--object-streams=disable");
+            qdfStart.ArgumentList.Add("--decode-level=generalized");
+            qdfStart.ArgumentList.Add(inputPath);
+            qdfStart.ArgumentList.Add(qdfPath);
+            var qdfRun = await QpdfProcessRunner.RunAsync(qdfStart, null, null, cancellationToken);
+            if (qdfRun.ExitCode != 0)
+            {
+                if (qdfRun.Error.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+                    qdfRun.Error.Contains("encrypted", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("This PDF is password-protected. Use Decrypt first.");
+                }
+
+                throw new InvalidOperationException("The PDF could not be read for scan optimization.");
+            }
+
+            var modified = await Task.Run(() =>
+                TryDownsampleQdf(qdfPath, maxDpi, jpegQuality, progress, cancellationToken), cancellationToken);
+            if (modified == 0)
+            {
+                return new DownsampleResult(false, null, 0);
+            }
+
+            var checkStart = QpdfProcessRunner.CreateStartInfo(qpdfPath);
+            checkStart.ArgumentList.Add("--check");
+            checkStart.ArgumentList.Add(qdfPath);
+            var check = await QpdfProcessRunner.RunAsync(checkStart, null, null, cancellationToken);
+            if (check.ExitCode is not (0 or 3))
+            {
+                // Splice produced something qpdf rejects: abandon quietly, the normal
+                // compress pass still runs on the original input.
+                return new DownsampleResult(false, null, 0);
+            }
+
+            var result = new DownsampleResult(true, qdfPath, modified);
+            qdfPath = string.Empty; // ownership moves to the caller, which deletes it
+            return result;
+        }
+        finally
+        {
+            if (qdfPath.Length > 0)
+            {
+                TryDeleteWorkspace(workspace);
+            }
+        }
+    }
+
+    internal static void DeleteWorkspaceFor(string qdfPath)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(qdfPath));
+        if (directory is not null && Path.GetFileName(directory).StartsWith("pdf-ninja-downsample-", StringComparison.Ordinal))
+        {
+            TryDeleteWorkspace(directory);
+        }
+    }
+
+    private static void TryDeleteWorkspace(string workspace)
+    {
+        try
+        {
+            if (Directory.Exists(workspace))
+            {
+                Directory.Delete(workspace, recursive: true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Leftover temp must not fail the operation.
+        }
+    }
+
+    // Returns the number of images rewritten. Mutates the QDF file in place.
+    internal static int TryDownsampleQdf(
+        string qdfPath,
+        int maxDpi,
+        int jpegQuality,
+        IProgress<int>? progress,
+        CancellationToken cancellationToken)
+    {
+        var bytes = File.ReadAllBytes(qdfPath);
+        var text = Latin1.GetString(bytes);
+        var objects = ParseObjects(text);
+        if (objects.Count == 0)
+        {
+            return 0;
+        }
+
+        var targets = FindDownsampleTargets(objects, text, maxDpi);
+        if (targets.Count == 0)
+        {
+            return 0;
+        }
+
+        var replacements = new List<ImageReplacement>(targets.Count);
+        var done = 0;
+        foreach (var (objectNumber, target) in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var image = objects[objectNumber];
+            var streamBytes = new byte[image.StreamLength];
+            Buffer.BlockCopy(bytes, image.StreamOffset, streamBytes, 0, image.StreamLength);
+            var replacement = TryReencode(streamBytes, target.Width, target.Height, jpegQuality);
+            if (replacement is not null)
+            {
+                replacements.Add(new ImageReplacement(objectNumber, replacement.Bytes, target.Width, target.Height, replacement.Gray));
+            }
+
+            done++;
+            progress?.Report(done * 100 / targets.Count);
+        }
+
+        if (replacements.Count == 0)
+        {
+            return 0;
+        }
+
+        File.WriteAllBytes(qdfPath, SpliceImages(bytes, text, objects, replacements));
+        return replacements.Count;
+    }
+
+    internal sealed record QdfObject(int Number, int DictOffset, int DictLength,
+        bool HasStream, int StreamOffset, int StreamLength);
+
+    internal sealed record ImageDraw(double A, double B, double C, double D, string Name);
+
+    internal sealed record TargetSize(int Width, int Height);
+
+    internal sealed record ImageReplacement(int ObjectNumber, byte[] JpegBytes, int Width, int Height, bool Gray);
+
+    private sealed record ReencodedImage(byte[] Bytes, bool Gray);
+
+    internal static Dictionary<int, QdfObject> ParseObjects(string text)
+    {
+        var headers = ObjHeaderPattern.Matches(text).Cast<Match>().ToList();
+        var objects = new Dictionary<int, QdfObject>(headers.Count);
+        for (var index = 0; index < headers.Count; index++)
+        {
+            var number = int.Parse(headers[index].Groups[1].Value);
+            var bodyStart = headers[index].Index + headers[index].Length;
+            var bodyEnd = index + 1 < headers.Count ? headers[index + 1].Index : text.Length;
+            var obj = ParseObjectBody(number, text, bodyStart, bodyEnd);
+            if (obj is not null)
+            {
+                objects[number] = obj;
+            }
+        }
+
+        return objects;
+    }
+
+    private static QdfObject? ParseObjectBody(int number, string text, int bodyStart, int bodyEnd)
+    {
+        var dictStart = text.IndexOf("<<", bodyStart, bodyEnd - bodyStart, StringComparison.Ordinal);
+        if (dictStart < 0)
+        {
+            return null; // bare value (e.g. a lone indirect length)
+        }
+
+        var dictEnd = FindDictEnd(text, dictStart, bodyEnd);
+        if (dictEnd < 0)
+        {
+            return null;
+        }
+
+        var afterDict = SkipWhitespace(text, dictEnd, bodyEnd);
+        if (!IsKeywordAt(text, afterDict, bodyEnd, "stream"))
+        {
+            return new QdfObject(number, dictStart, dictEnd - dictStart, false, 0, 0);
+        }
+
+        var dataStart = SkipStreamEol(text, afterDict + "stream".Length, bodyEnd);
+        if (dataStart < 0)
+        {
+            return null;
+        }
+
+        var dictText = text.Substring(dictStart, dictEnd - dictStart);
+        var length = ResolveLength(dictText, text);
+        if (length is null || length < 0 || dataStart + length.Value > bodyEnd)
+        {
+            return null;
+        }
+
+        return new QdfObject(number, dictStart, dictEnd - dictStart, true, dataStart, length.Value);
+    }
+
+    private static int FindDictEnd(string text, int start, int limit)
+    {
+        var depth = 0;
+        var index = start;
+        while (index + 1 < limit)
+        {
+            if (text[index] == '<' && text[index + 1] == '<')
+            {
+                depth++;
+                index += 2;
+            }
+            else if (text[index] == '>' && text[index + 1] == '>')
+            {
+                depth--;
+                index += 2;
+                if (depth == 0)
+                {
+                    return index;
+                }
+            }
+            else
+            {
+                index++;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int? ResolveLength(string dictText, string fullText)
+    {
+        var match = LengthPattern.Match(dictText);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        if (!match.Groups[2].Success)
+        {
+            return int.Parse(match.Groups[1].Value);
+        }
+
+        // Indirect length: find the referenced object's bare integer value.
+        var refNumber = match.Groups[1].Value;
+        var refHeader = Regex.Match(fullText, $@"(?<!\d){refNumber}\s+\d+\s+obj\b");
+        if (!refHeader.Success)
+        {
+            return null;
+        }
+
+        var valueStart = refHeader.Index + refHeader.Length;
+        var valueMatch = Regex.Match(fullText.Substring(valueStart, Math.Min(64, fullText.Length - valueStart)), @"\s*(\d+)");
+        return valueMatch.Success ? int.Parse(valueMatch.Groups[1].Value) : null;
+    }
+
+    private static int SkipWhitespace(string text, int index, int limit)
+    {
+        while (index < limit && char.IsWhiteSpace(text[index]))
+        {
+            index++;
+        }
+
+        return index;
+    }
+
+    private static bool IsKeywordAt(string text, int index, int limit, string keyword)
+    {
+        if (index + keyword.Length > limit)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < keyword.Length; i++)
+        {
+            if (text[index + i] != keyword[i])
+            {
+                return false;
+            }
+        }
+
+        var after = index + keyword.Length;
+        return after >= limit || !char.IsLetterOrDigit(text[after]);
+    }
+
+    private static int SkipStreamEol(string text, int index, int limit)
+    {
+        // PDF spec: EOL after "stream" is CRLF or LF (a lone CR is tolerated here).
+        if (index < limit && text[index] == '\r')
+        {
+            index++;
+        }
+
+        return index < limit && text[index] == '\n' ? index + 1 : -1;
+    }
+
+    internal static bool IsImageDict(string dictText, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        if (!Regex.IsMatch(dictText, @"/Subtype\s*/Image\b"))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(dictText, @"/ImageMask\s*true\b"))
+        {
+            return false;
+        }
+
+        if (dictText.Contains("/SMask", StringComparison.Ordinal))
+        {
+            return false; // transparency group: leave soft-masked images alone
+        }
+
+        var widthMatch = Regex.Match(dictText, @"/Width\s+(\d+)");
+        var heightMatch = Regex.Match(dictText, @"/Height\s+(\d+)");
+        if (!widthMatch.Success || !heightMatch.Success)
+        {
+            return false;
+        }
+
+        width = int.Parse(widthMatch.Groups[1].Value);
+        height = int.Parse(heightMatch.Groups[1].Value);
+        return width > 0 && height > 0;
+    }
+
+    internal static List<ImageDraw> ParseContentDraws(string content)
+    {
+        var draws = new List<ImageDraw>();
+        // Handles both single-line and split-across-lines "a b c d e f cm /Name Do".
+        foreach (Match match in DrawPattern.Matches(content))
+        {
+            draws.Add(new ImageDraw(
+                double.Parse(match.Groups[1].Value),
+                double.Parse(match.Groups[2].Value),
+                double.Parse(match.Groups[3].Value),
+                double.Parse(match.Groups[4].Value),
+                match.Groups[7].Value));
+        }
+
+        return draws;
+    }
+
+    internal static double EffectiveDpi(int pixels, double drawnPoints) =>
+        drawnPoints > 0 ? pixels * 72.0 / drawnPoints : 0;
+
+    // Object number -> target pixel size. Keeps the tightest scale when an image
+    // is drawn more than once.
+    internal static Dictionary<int, TargetSize> FindDownsampleTargets(
+        Dictionary<int, QdfObject> objects, string text, int maxDpi)
+    {
+        var targets = new Dictionary<int, TargetSize>();
+        foreach (var (number, obj) in objects)
+        {
+            var dictText = text.Substring(obj.DictOffset, obj.DictLength);
+            if (!PageTypePattern.IsMatch(dictText))
+            {
+                continue;
+            }
+
+            var xobjects = ExtractXObjectMap(dictText);
+            if (xobjects.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var contentNumber in ExtractContentNumbers(dictText))
+            {
+                if (!objects.TryGetValue(contentNumber, out var content) || !content.HasStream)
+                {
+                    continue;
+                }
+
+                var contentDict = text.Substring(content.DictOffset, content.DictLength);
+                if (contentDict.Contains("/Filter", StringComparison.Ordinal))
+                {
+                    continue; // still encoded: cannot read draws safely
+                }
+
+                var contentText = text.Substring(content.StreamOffset, content.StreamLength);
+                foreach (var draw in ParseContentDraws(contentText))
+                {
+                    if (!xobjects.TryGetValue(draw.Name, out var imageNumber) ||
+                        !objects.TryGetValue(imageNumber, out var image) || !image.HasStream)
+                    {
+                        continue;
+                    }
+
+                    var imageDict = text.Substring(image.DictOffset, image.DictLength);
+                    if (!IsImageDict(imageDict, out var width, out var height) ||
+                        width < MinPixelsToConsider || height < MinPixelsToConsider)
+                    {
+                        continue;
+                    }
+
+                    var drawnWidth = Math.Sqrt(draw.A * draw.A + draw.B * draw.B);
+                    var drawnHeight = Math.Sqrt(draw.C * draw.C + draw.D * draw.D);
+                    var dpiX = EffectiveDpi(width, drawnWidth);
+                    var dpiY = EffectiveDpi(height, drawnHeight);
+                    if (dpiX <= 0 || dpiY <= 0)
+                    {
+                        continue;
+                    }
+
+                    var scale = Math.Min(maxDpi / dpiX, maxDpi / dpiY);
+                    if (scale >= 1)
+                    {
+                        continue;
+                    }
+
+                    var targetWidth = Math.Max(MinTargetPixels, (int)(width * scale));
+                    var targetHeight = Math.Max(MinTargetPixels, (int)(height * scale));
+                    if (targetWidth >= width && targetHeight >= height)
+                    {
+                        continue;
+                    }
+
+                    if (!targets.TryGetValue(imageNumber, out var existing) ||
+                        targetWidth * (long)targetHeight < existing.Width * (long)existing.Height)
+                    {
+                        targets[imageNumber] = new TargetSize(targetWidth, targetHeight);
+                    }
+                }
+            }
+        }
+
+        return targets;
+    }
+
+    internal static Dictionary<string, int> ExtractXObjectMap(string pageDictText)
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        var xobjectIndex = pageDictText.IndexOf("/XObject", StringComparison.Ordinal);
+        if (xobjectIndex < 0)
+        {
+            return map;
+        }
+
+        var innerStart = pageDictText.IndexOf("<<", xobjectIndex, StringComparison.Ordinal);
+        if (innerStart < 0)
+        {
+            return map;
+        }
+
+        var innerEnd = FindDictEnd(pageDictText, innerStart, pageDictText.Length);
+        if (innerEnd < 0)
+        {
+            return map;
+        }
+
+        foreach (Match entry in XObjectEntryPattern.Matches(pageDictText.Substring(innerStart, innerEnd - innerStart)))
+        {
+            map[entry.Groups[1].Value] = int.Parse(entry.Groups[2].Value);
+        }
+
+        return map;
+    }
+
+    internal static List<int> ExtractContentNumbers(string pageDictText)
+    {
+        var numbers = new List<int>();
+        var match = ContentsPattern.Match(pageDictText);
+        if (!match.Success)
+        {
+            return numbers;
+        }
+
+        foreach (Match entry in ContentsEntryPattern.Matches(match.Groups[1].Value))
+        {
+            numbers.Add(int.Parse(entry.Groups[1].Value));
+        }
+
+        return numbers;
+    }
+
+    private static ReencodedImage? TryReencode(byte[] source, int targetWidth, int targetHeight, int jpegQuality)
+    {
+        if (source.Length < 2 || source[0] != 0xFF || source[1] != 0xD8)
+        {
+            return null; // JPEG only in v1
+        }
+
+        try
+        {
+            using var input = new MemoryStream(source, writable: false);
+            var decoder = new JpegBitmapDecoder(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            if (decoder.Frames.Count == 0)
+            {
+                return null;
+            }
+
+            var frame = decoder.Frames[0];
+            var gray = frame.Format == PixelFormats.Gray8;
+            if (!gray && frame.Format != PixelFormats.Bgr24 && frame.Format != PixelFormats.Bgr32 &&
+                frame.Format != PixelFormats.Bgra32)
+            {
+                return null; // CMYK and friends: leave alone rather than shift colors
+            }
+
+            if (frame.PixelWidth <= targetWidth && frame.PixelHeight <= targetHeight)
+            {
+                return null;
+            }
+
+            var scaled = new TransformedBitmap(frame, new ScaleTransform(
+                targetWidth / (double)frame.PixelWidth, targetHeight / (double)frame.PixelHeight));
+            scaled.Freeze();
+
+            var encoder = new JpegBitmapEncoder { QualityLevel = Math.Clamp(jpegQuality, 1, 100) };
+            encoder.Frames.Add(BitmapFrame.Create(scaled));
+            using var output = new MemoryStream();
+            encoder.Save(output);
+            var encoded = output.ToArray();
+            if (encoded.Length >= source.Length)
+            {
+                return null; // no win: keep the original bytes
+            }
+
+            return new ReencodedImage(encoded, gray);
+        }
+        catch (Exception exception) when (exception is NotSupportedException or FileFormatException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    internal static byte[] SpliceImages(byte[] bytes, string text, Dictionary<int, QdfObject> objects,
+        List<ImageReplacement> replacements)
+    {
+        using var spliced = new MemoryStream(bytes.Length);
+        var cursor = 0;
+        foreach (var replacement in replacements.OrderBy(r => objects[r.ObjectNumber].DictOffset))
+        {
+            var image = objects[replacement.ObjectNumber];
+            var dictText = text.Substring(image.DictOffset, image.DictLength);
+            var newDict = RewriteImageDict(dictText, replacement);
+
+            spliced.Write(bytes, cursor, image.DictOffset - cursor);
+            var newDictBytes = Latin1.GetBytes(newDict);
+            spliced.Write(newDictBytes, 0, newDictBytes.Length);
+            // Preserve the original ">> ... stream<EOL>" span verbatim ...
+            spliced.Write(bytes, image.DictOffset + image.DictLength, image.StreamOffset - (image.DictOffset + image.DictLength));
+            // ... but normalize the trailing EOL so Length stays exact.
+            spliced.Write(replacement.JpegBytes, 0, replacement.JpegBytes.Length);
+            var tail = Latin1.GetBytes("\nendstream");
+            spliced.Write(tail, 0, tail.Length);
+            cursor = image.StreamOffset + image.StreamLength;
+            // Skip the original EOL before endstream.
+            var skipped = SkipOriginalTail(text, cursor);
+            cursor = skipped;
+        }
+
+        spliced.Write(bytes, cursor, bytes.Length - cursor);
+        return spliced.ToArray();
+    }
+
+    // After the replaced stream data, the original file has "<EOL>endstream".
+    // Returns the offset just past that EOL.
+    private static int SkipOriginalTail(string text, int cursor)
+    {
+        var index = cursor;
+        if (index < text.Length && text[index] == '\r')
+        {
+            index++;
+        }
+
+        if (index < text.Length && text[index] == '\n')
+        {
+            index++;
+        }
+
+        return index;
+    }
+
+    internal static string RewriteImageDict(string dictText, ImageReplacement replacement)
+    {
+        var rewritten = Regex.Replace(dictText, @"/Width\s+\d+", $"/Width {replacement.Width}");
+        rewritten = Regex.Replace(rewritten, @"/Height\s+\d+", $"/Height {replacement.Height}");
+        rewritten = LengthPattern.Replace(rewritten, $"/Length {replacement.JpegBytes.Length}");
+        rewritten = FilterPattern.Replace(rewritten, "/Filter /DCTDecode");
+        var colorSpace = replacement.Gray ? "/DeviceGray" : "/DeviceRGB";
+        rewritten = ColorSpacePattern.Replace(rewritten, $"/ColorSpace {colorSpace}");
+        rewritten = Regex.Replace(rewritten, @"/BitsPerComponent\s+\d+", "/BitsPerComponent 8");
+        rewritten = DecodeParmsPattern.Replace(rewritten, string.Empty);
+        return rewritten;
+    }
+}

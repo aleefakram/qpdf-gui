@@ -30,7 +30,8 @@ public partial class CompressPage : UserControl, IBusyPage
                 BusyStateChanged?.Invoke(this, EventArgs.Empty);
                 RefreshChrome();
             }
-            else if (eventArgs.PropertyName is nameof(CompressViewModel.Outcome) or nameof(CompressViewModel.StatusPercent))
+            else if (eventArgs.PropertyName is nameof(CompressViewModel.Outcome) or nameof(CompressViewModel.StatusPercent)
+                or nameof(CompressViewModel.IsDownsampling))
             {
                 RefreshChrome();
             }
@@ -50,7 +51,9 @@ public partial class CompressPage : UserControl, IBusyPage
         CancelButton.Visibility = viewModel.IsBusy ? Visibility.Visible : Visibility.Hidden;
         if (viewModel.IsBusy)
         {
-            Status.ShowRunning($"Compressing PDF… {viewModel.StatusPercent}%");
+            Status.ShowRunning(viewModel.IsDownsampling
+                ? "Downsampling scans…"
+                : $"Compressing PDF… {viewModel.StatusPercent}%");
             Status.Report(viewModel.StatusPercent);
             return;
         }
@@ -97,6 +100,15 @@ public partial class CompressPage : UserControl, IBusyPage
             int.TryParse(tag, out var quality))
         {
             viewModel.ImageQualityPercent = quality;
+        }
+    }
+
+    private void ResolutionPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ResolutionPicker.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            int.TryParse(tag, out var dpi))
+        {
+            viewModel.MaxResolutionDpi = dpi;
         }
     }
 
