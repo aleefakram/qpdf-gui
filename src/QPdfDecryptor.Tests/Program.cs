@@ -31,6 +31,7 @@ public static class Program
             ("Downsample resolves indirect Resources maps", DownsampleResolvesIndirectResources),
             ("Compress reports note when nothing qualified", CompressNoteWhenNothingQualified),
             ("Compress pre-pass refusal falls through to main run", CompressPrePassRefusalFallsThrough),
+            ("Staged runner skips pre-pass when resolution is Original", StagedRunnerSkipsPrePassWhenOriginal),
         };
 
         foreach (var test in tests)
@@ -383,6 +384,25 @@ public static class Program
         Assert(seen is not null && seen.InputPath == "in.pdf", "main run must get the original input");
         Assert(vm.Outcome?.FriendlyError.Contains("password-protected") == true, "refusal must surface");
         Assert(!vm.IsBusy && !vm.IsDownsampling, "busy flags cleared");
+    }
+
+    private static async Task StagedRunnerSkipsPrePassWhenOriginal()
+    {
+        var prePassCalled = false;
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+                Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok")),
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+            {
+                prePassCalled = true;
+                return Task.FromResult(new Operations.DownsampleResult(false, null, 0, 0));
+            });
+        var result = await runner.RunAsync(
+            new Operations.StagedCompressInput("q.pdf", "in.pdf", "o.pdf", 0, 75, true, false),
+            null, null, CancellationToken.None);
+        Assert(!prePassCalled, "pre-pass must not run when resolution is Original");
+        Assert(result.Outcome.Succeeded, "outcome forwarded");
+        Assert(result.Note.Length == 0, "note empty when pre-pass skipped");
     }
 
     private static string? FindRepoQpdf()
