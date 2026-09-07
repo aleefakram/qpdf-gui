@@ -43,6 +43,8 @@ public static class Program
             ("Downsample rejects undecodable Flate", DownsampleRejectsBadFlate),
             ("Downsample reverses TIFF predictor", DownsampleReversesTiffPredictor),
             ("Downsample reverses TIFF predictor across rows", DownsampleReversesTiffPredictorMultiRow),
+            ("Downsample maps indexed palette to RGB", DownsampleMapsIndexedPalette),
+            ("Downsample skips unsupported indexed forms", DownsampleSkipsBadIndexed),
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
             ("Compress forwards staged input and surfaces note", CompressForwardsStagedInputAndSurfacesNote),
             ("Compress forwards Original resolution to staged run", CompressForwardsOriginalResolution),
@@ -422,6 +424,52 @@ public static class Program
             "row 1 first pixel must decode independently of row 0");
         Assert(decoded.Pixels[3] == 60 && decoded.Pixels[4] == 50 && decoded.Pixels[5] == 40,
             "row 0 second pixel wrong after reversal + BGR swizzle");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleMapsIndexedPalette()
+    {
+        // 2x1, 8-bit indices 0 and 2 into a 3-entry RGB palette.
+        byte[] indices = [0, 2];
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(indices, 0, indices.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        // Palette: entry0 = red (255,0,0), entry1 = green, entry2 = blue (0,0,255).
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            "/ColorSpace [/Indexed /DeviceRGB 2 (\\377\\000\\000\\000\\377\\000\\000\\000\\377)] " +
+            "/BitsPerComponent 8 /Filter /FlateDecode /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null && !decoded.Gray, "indexed RGB must decode");
+        Assert(decoded.Pixels.Length == 6, "wrong output length");
+        Assert(decoded.Pixels[0] == 0 && decoded.Pixels[1] == 0 && decoded.Pixels[2] == 255,
+            "index 0 must map to red, swizzled to BGR");
+        Assert(decoded.Pixels[3] == 255 && decoded.Pixels[4] == 0 && decoded.Pixels[5] == 0,
+            "index 2 must map to blue, swizzled to BGR");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleSkipsBadIndexed()
+    {
+        // CMYK base: out of scope.
+        const string cmyk = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            "/ColorSpace [/Indexed /DeviceCMYK 1 (\\000\\000\\000\\000)] " +
+            "/BitsPerComponent 8 /Filter /FlateDecode /Length 0 >>";
+        Assert(Operations.ScanDownsampleService.DecodeFlateImage(new byte[] { 0, 0 }, cmyk, _ => null) is null,
+            "indexed CMYK must be skipped");
+        // Truncated palette: hival claims 2 entries but only 1 present.
+        const string short_ = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            "/ColorSpace [/Indexed /DeviceRGB 2 (\\377\\000\\000)] " +
+            "/BitsPerComponent 8 /Filter /FlateDecode /Length 0 >>";
+        Assert(Operations.ScanDownsampleService.DecodeFlateImage(new byte[] { 0, 0 }, short_, _ => null) is null,
+            "short palette must be skipped");
         return Task.CompletedTask;
     }
 

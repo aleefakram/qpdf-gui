@@ -731,7 +731,6 @@ internal static class ScanDownsampleService
     // Task 2/3 placeholder: indirect /DecodeParms resolution comes later
     private static string DecodeParmsText(string dictText, Func<int, string?> refResolver) => dictText;
 
-    // Task 3 placeholder: indexed colorspaces deferred
     private static bool TryDescribePixels(string dictText, Func<int, string?> refResolver, int width,
         out int components, out int indexBpc, out byte[]? palette, out bool gray)
     {
@@ -739,6 +738,187 @@ internal static class ScanDownsampleService
         indexBpc = 0;
         palette = null;
         gray = false;
+        var indexed = Regex.Match(dictText, @"/ColorSpace\s*\[\s*/Indexed\s+(\S+)\s+(\d+)", RegexOptions.Singleline);
+        if (indexed.Success)
+        {
+            var baseName = indexed.Groups[1].Value;
+            if (baseName != "/DeviceRGB" && baseName != "/DeviceGray")
+            {
+                return false;
+            }
+
+            gray = baseName == "/DeviceGray";
+            if (!int.TryParse(indexed.Groups[2].Value, out var hival) || hival < 0)
+            {
+                return false;
+            }
+
+            var bits = MatchInt(dictText, "BitsPerComponent");
+            if (bits is not (1 or 2 or 4 or 8))
+            {
+                return false;
+            }
+
+            var rest = dictText.Substring(indexed.Groups[2].Index + indexed.Groups[2].Length).TrimStart();
+            byte[]? paletteBytes = null;
+            if (rest.StartsWith("(", StringComparison.Ordinal))
+            {
+                var depth = 0;
+                var end = -1;
+                for (var i = 0; i < rest.Length; i++)
+                {
+                    var c = rest[i];
+                    if (c == '\\')
+                    {
+                        i++;
+                        if (i < rest.Length && rest[i] == '\r' && i + 1 < rest.Length && rest[i + 1] == '\n')
+                        {
+                            i++;
+                        }
+
+                        continue;
+                    }
+
+                    if (c == '(')
+                    {
+                        depth++;
+                    }
+                    else if (c == ')')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            end = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (end < 0)
+                {
+                    return false;
+                }
+
+                paletteBytes = DecodeLiteralString(rest.Substring(0, end + 1));
+            }
+            else if (rest.StartsWith("<", StringComparison.Ordinal))
+            {
+                if (rest.StartsWith("<<", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                var end = rest.IndexOf('>');
+                if (end < 0)
+                {
+                    return false;
+                }
+
+                paletteBytes = DecodeLiteralString(rest.Substring(0, end + 1));
+            }
+            else
+            {
+                var reference = Regex.Match(rest, @"^(\d+)\s+(\d+)\s+R");
+                if (!reference.Success || !int.TryParse(reference.Groups[1].Value, out var refNumber))
+                {
+                    return false;
+                }
+
+                var resolved = refResolver(refNumber);
+                if (resolved is null)
+                {
+                    return false;
+                }
+
+                var literalIndex = resolved.IndexOf('(');
+                var hexIndex = -1;
+                for (var i = 0; i < resolved.Length; i++)
+                {
+                    if (resolved[i] == '<')
+                    {
+                        if (i + 1 < resolved.Length && resolved[i + 1] == '<')
+                        {
+                            i++;
+                            continue;
+                        }
+
+                        hexIndex = i;
+                        break;
+                    }
+                }
+
+                if (literalIndex >= 0 && (hexIndex < 0 || literalIndex < hexIndex))
+                {
+                    var depth = 0;
+                    var end = -1;
+                    for (var i = literalIndex; i < resolved.Length; i++)
+                    {
+                        var c = resolved[i];
+                        if (c == '\\')
+                        {
+                            i++;
+                            if (i < resolved.Length && resolved[i] == '\r' && i + 1 < resolved.Length && resolved[i + 1] == '\n')
+                            {
+                                i++;
+                            }
+
+                            continue;
+                        }
+
+                        if (c == '(')
+                        {
+                            depth++;
+                        }
+                        else if (c == ')')
+                        {
+                            depth--;
+                            if (depth == 0)
+                            {
+                                end = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (end < 0)
+                    {
+                        return false;
+                    }
+
+                    paletteBytes = DecodeLiteralString(resolved.Substring(literalIndex, end - literalIndex + 1));
+                }
+                else if (hexIndex >= 0)
+                {
+                    var end = resolved.IndexOf('>', hexIndex + 1);
+                    if (end < 0)
+                    {
+                        return false;
+                    }
+
+                    paletteBytes = DecodeLiteralString(resolved.Substring(hexIndex, end - hexIndex + 1));
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            if (paletteBytes is null)
+            {
+                return false;
+            }
+
+            var channels = gray ? 1 : 3;
+            if (paletteBytes.Length != (hival + 1) * channels)
+            {
+                return false;
+            }
+
+            indexBpc = bits.Value;
+            palette = paletteBytes;
+            return true;
+        }
+
         if (MatchInt(dictText, "BitsPerComponent") != 8)
         {
             return false;
@@ -784,8 +964,154 @@ internal static class ScanDownsampleService
         return output;
     }
 
-    private static DecodedFlate? ApplyPalette(byte[] samples, int width, int height, int indexBpc, byte[] palette, bool gray) =>
-        null; // Task 3: indexed palette expansion (deferred)
+    private static DecodedFlate? ApplyPalette(byte[] samples, int width, int height, int indexBpc, byte[] palette, bool gray)
+    {
+        var channels = gray ? 1 : 3;
+        var pixels = new byte[width * height * channels];
+        var entries = palette.Length / channels;
+        var bitPosition = 0;
+        for (var i = 0; i < width * height; i++)
+        {
+            var index = 0;
+            for (var b = 0; b < indexBpc; b++)
+            {
+                var byteIndex = bitPosition / 8;
+                var bit = 7 - (bitPosition % 8);
+                index = (index << 1) | ((samples[byteIndex] >> bit) & 1);
+                bitPosition++;
+            }
+
+            if (index >= entries)
+            {
+                return null;
+            }
+
+            if (gray)
+            {
+                pixels[i] = palette[index];
+            }
+            else
+            {
+                pixels[i * 3] = palette[index * 3 + 2];
+                pixels[i * 3 + 1] = palette[index * 3 + 1];
+                pixels[i * 3 + 2] = palette[index * 3];
+            }
+        }
+
+        return new DecodedFlate(pixels, width, height, gray);
+    }
+
+    private static byte[] DecodeLiteralString(string token)
+    {
+        if (token.StartsWith("<", StringComparison.Ordinal))
+        {
+            var end = token.IndexOf('>');
+            var inner = end >= 0 ? token.Substring(1, end - 1) : token.Substring(1);
+            var cleaned = new StringBuilder(inner.Length);
+            foreach (var c in inner)
+            {
+                if (!char.IsWhiteSpace(c))
+                {
+                    cleaned.Append(c);
+                }
+            }
+
+            if (cleaned.Length % 2 == 1)
+            {
+                cleaned.Append('0');
+            }
+
+            var bytes = new byte[cleaned.Length / 2];
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                var pair = cleaned.ToString(i * 2, 2);
+                if (!byte.TryParse(pair, System.Globalization.NumberStyles.HexNumber, null, out var value))
+                {
+                    return Array.Empty<byte>();
+                }
+
+                bytes[i] = value;
+            }
+
+            return bytes;
+        }
+
+        var body = token;
+        if (body.StartsWith("(", StringComparison.Ordinal) && body.EndsWith(")", StringComparison.Ordinal) && body.Length >= 2)
+        {
+            body = body.Substring(1, body.Length - 2);
+        }
+
+        var output = new List<byte>(body.Length);
+        for (var i = 0; i < body.Length; i++)
+        {
+            var c = body[i];
+            if (c != '\\')
+            {
+                output.Add((byte)c);
+                continue;
+            }
+
+            if (i + 1 >= body.Length)
+            {
+                break;
+            }
+
+            var next = body[++i];
+            switch (next)
+            {
+                case 'n':
+                    output.Add(10);
+                    break;
+                case 'r':
+                    output.Add(13);
+                    break;
+                case 't':
+                    output.Add(9);
+                    break;
+                case 'b':
+                    output.Add(8);
+                    break;
+                case 'f':
+                    output.Add(12);
+                    break;
+                case '(':
+                    output.Add(40);
+                    break;
+                case ')':
+                    output.Add(41);
+                    break;
+                case '\\':
+                    output.Add(92);
+                    break;
+                case '\r':
+                    if (i + 1 < body.Length && body[i + 1] == '\n')
+                    {
+                        i++;
+                    }
+
+                    break;
+                case '\n':
+                    break;
+                case >= '0' and <= '7':
+                    var value = next - '0';
+                    var digits = 1;
+                    while (digits < 3 && i + 1 < body.Length && body[i + 1] >= '0' && body[i + 1] <= '7')
+                    {
+                        value = value * 8 + (body[++i] - '0');
+                        digits++;
+                    }
+
+                    output.Add((byte)value);
+                    break;
+                default:
+                    output.Add((byte)next);
+                    break;
+            }
+        }
+
+        return output.ToArray();
+    }
 
     private static byte[] SwizzleRgbToBgr(byte[] rgb)
     {
