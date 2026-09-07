@@ -42,6 +42,7 @@ public static class Program
             ("Downsample decodes Flate gray image", DownsampleDecodesFlateGray),
             ("Downsample rejects undecodable Flate", DownsampleRejectsBadFlate),
             ("Downsample reverses TIFF predictor", DownsampleReversesTiffPredictor),
+            ("Downsample reverses TIFF predictor across rows", DownsampleReversesTiffPredictorMultiRow),
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
             ("Compress forwards staged input and surfaces note", CompressForwardsStagedInputAndSurfacesNote),
             ("Compress forwards Original resolution to staged run", CompressForwardsOriginalResolution),
@@ -381,6 +382,46 @@ public static class Program
             "first pixel wrong after reversal + BGR swizzle");
         Assert(decoded.Pixels[11] == 13 && decoded.Pixels[10] == 23 && decoded.Pixels[9] == 33,
             "last pixel wrong after reversal + BGR swizzle");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleReversesTiffPredictorMultiRow()
+    {
+        // 2x2 RGB (6 bytes per row), predictor-2 encoded per row independently.
+        byte[] plain = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+        var encoded = new byte[plain.Length];
+        for (var row = 0; row < 2; row++)
+        {
+            var offset = row * 6;
+            encoded[offset] = plain[offset];
+            encoded[offset + 1] = plain[offset + 1];
+            encoded[offset + 2] = plain[offset + 2];
+            for (var i = 3; i < 6; i++)
+            {
+                encoded[offset + i] = (byte)(plain[offset + i] - plain[offset + i - 3]);
+            }
+        }
+
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(encoded, 0, encoded.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 " +
+            "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode " +
+            "/DecodeParms << /Predictor 2 /Columns 2 >> /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null, "predictor-2 Flate must decode");
+        Assert(decoded.Pixels[6] == 90 && decoded.Pixels[7] == 80 && decoded.Pixels[8] == 70,
+            "row 1 first pixel must decode independently of row 0");
+        Assert(decoded.Pixels[3] == 60 && decoded.Pixels[4] == 50 && decoded.Pixels[5] == 40,
+            "row 0 second pixel wrong after reversal + BGR swizzle");
         return Task.CompletedTask;
     }
 
