@@ -38,6 +38,8 @@ public static class Program
             ("Downsample targets flag oversized scans", DownsampleTargetsFlagOversized),
             ("Downsample targets skip content under the cap", DownsampleTargetsSkipWhenUnderCap),
             ("Downsample rewrite dict updates dimensions", DownsampleRewriteDict),
+            ("Downsample decodes Flate RGB image", DownsampleDecodesFlateRgb),
+            ("Downsample rejects undecodable Flate", DownsampleRejectsBadFlate),
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
             ("Compress forwards staged input and surfaces note", CompressForwardsStagedInputAndSurfacesNote),
             ("Compress forwards Original resolution to staged run", CompressForwardsOriginalResolution),
@@ -251,6 +253,50 @@ public static class Program
         Assert(rewritten.Contains("/Width 600") && rewritten.Contains("/Height 750"), "dims not updated");
         Assert(rewritten.Contains("/Length 10"), "length not direct");
         Assert(rewritten.Contains("/Filter /DCTDecode"), "filter not normalized");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleDecodesFlateRgb()
+    {
+        const int width = 8;
+        const int height = 4;
+        var pixels = new byte[width * height * 3];
+        for (var i = 0; i < pixels.Length; i++)
+        {
+            pixels[i] = (byte)(i * 7);
+        }
+
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(pixels, 0, pixels.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 8 /Height 4 " +
+            "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null, "valid Flate RGB must decode");
+        Assert(decoded.Width == 8 && decoded.Height == 4 && !decoded.Gray, "wrong dims/space");
+        Assert(decoded.Pixels.Length == pixels.Length, "wrong pixel length");
+        // WIC Bgr24 order: R,G,B input becomes B,G,R output.
+        Assert(decoded.Pixels[0] == pixels[2] && decoded.Pixels[1] == pixels[1] && decoded.Pixels[2] == pixels[0],
+            "samples not swizzled to BGR");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleRejectsBadFlate()
+    {
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 8 /Height 4 " +
+            "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length 4 >>";
+        Assert(Operations.ScanDownsampleService.DecodeFlateImage(new byte[] { 0xFF, 0xD8, 0x00, 0x01 }, dict, _ => null) is null,
+            "non-Flate bytes must be rejected");
+        Assert(Operations.ScanDownsampleService.DecodeFlateImage(new byte[10], dict.Replace("/DeviceRGB", "/DeviceCMYK"), _ => null) is null,
+            "CMYK must be skipped");
         return Task.CompletedTask;
     }
 

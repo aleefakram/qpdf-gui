@@ -1,4 +1,5 @@
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Media;
@@ -592,6 +593,12 @@ internal static class ScanDownsampleService
         return numbers;
     }
 
+    private static int? MatchInt(string dictText, string key)
+    {
+        var match = Regex.Match(dictText, $@"/{key}\s+(\d+)");
+        return match.Success ? int.Parse(match.Groups[1].Value) : null;
+    }
+
     private static ReencodedImage? TryReencode(byte[] source, int targetWidth, int targetHeight, int jpegQuality)
     {
         if (source.Length < 2 || source[0] != 0xFF || source[1] != 0xD8)
@@ -641,6 +648,134 @@ internal static class ScanDownsampleService
         {
             return null;
         }
+    }
+
+    internal sealed record DecodedFlate(byte[] Pixels, int Width, int Height, bool Gray);
+
+    private const long MaxDecompressedBytes = 256L * 1024 * 1024; // zip-bomb guard
+
+    // Decodes FlateDecode image streams to WIC-ready pixels (Bgr24, or Gray8).
+    // Returns null for anything outside v1 scope: the image stays untouched.
+    internal static DecodedFlate? DecodeFlateImage(byte[] streamBytes, string dictText, Func<int, string?> refResolver)
+    {
+        byte[] raw;
+        try
+        {
+            using var input = new MemoryStream(streamBytes, writable: false);
+            using var zlib = new ZLibStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            var buffer = new byte[65536];
+            int read;
+            long total = 0;
+            while ((read = zlib.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                total += read;
+                if (total > MaxDecompressedBytes)
+                {
+                    return null;
+                }
+
+                output.Write(buffer, 0, read);
+            }
+
+            raw = output.ToArray();
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException)
+        {
+            return null; // not a Flate stream
+        }
+
+        var width = MatchInt(dictText, "Width");
+        var height = MatchInt(dictText, "Height");
+        if (width is null || height is null || width <= 0 || height <= 0)
+        {
+            return null;
+        }
+
+        var predictor = MatchInt(DecodeParmsText(dictText, refResolver), "Predictor") ?? 1;
+        if (predictor is not (1 or 2))
+        {
+            return null; // PNG predictors 10-15 deferred
+        }
+
+        if (!TryDescribePixels(dictText, refResolver, width.Value, out var components, out var indexBpc, out var palette, out var gray))
+        {
+            return null;
+        }
+
+        var rowBytes = (width.Value * (indexBpc > 0 ? indexBpc : 8 * components) + 7) / 8;
+        if (raw.Length != rowBytes * height.Value)
+        {
+            return null; // stride mismatch: never guess
+        }
+
+        var samples = ApplyPredictor(raw, width.Value, height.Value, rowBytes, indexBpc > 0 ? 1 : components, predictor);
+        if (samples is null)
+        {
+            return null;
+        }
+
+        if (indexBpc > 0)
+        {
+            return ApplyPalette(samples, width.Value, height.Value, indexBpc, palette!, gray);
+        }
+
+        if (gray)
+        {
+            return new DecodedFlate(samples, width.Value, height.Value, true);
+        }
+
+        return new DecodedFlate(SwizzleRgbToBgr(samples), width.Value, height.Value, false);
+    }
+
+    private static string DecodeParmsText(string dictText, Func<int, string?> refResolver) => dictText;
+
+    private static bool TryDescribePixels(string dictText, Func<int, string?> refResolver, int width,
+        out int components, out int indexBpc, out byte[]? palette, out bool gray)
+    {
+        components = 0;
+        indexBpc = 0;
+        palette = null;
+        gray = false;
+        if (MatchInt(dictText, "BitsPerComponent") != 8)
+        {
+            return false;
+        }
+
+        var colorSpace = Regex.Match(dictText, @"/ColorSpace\s*(/\S+)").Groups[1].Value;
+        if (colorSpace == "/DeviceRGB")
+        {
+            components = 3;
+            return true;
+        }
+
+        if (colorSpace == "/DeviceGray")
+        {
+            components = 1;
+            gray = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static byte[]? ApplyPredictor(byte[] raw, int width, int height, int rowBytes, int components, int predictor) =>
+        predictor == 1 ? raw : null;
+
+    private static DecodedFlate? ApplyPalette(byte[] samples, int width, int height, int indexBpc, byte[] palette, bool gray) =>
+        null; // Task 3 (in the full plan; NOT your task — leave the stub exactly as-is)
+
+    private static byte[] SwizzleRgbToBgr(byte[] rgb)
+    {
+        var bgr = new byte[rgb.Length];
+        for (var i = 0; i + 2 < rgb.Length + 1; i += 3)
+        {
+            bgr[i] = rgb[i + 2];
+            bgr[i + 1] = rgb[i + 1];
+            bgr[i + 2] = rgb[i];
+        }
+
+        return bgr;
     }
 
     internal static byte[] SpliceImages(byte[] bytes, string text, Dictionary<int, QdfObject> objects,
