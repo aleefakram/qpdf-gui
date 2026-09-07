@@ -5,8 +5,21 @@ namespace QPdfDecryptor;
 
 public static class Program
 {
-    public static async Task<int> Main()
+    public static async Task<int> Main(string[] args)
     {
+        // Fake-qpdf mode: when spawned as a child process with qpdf arguments (via
+        // Environment.ProcessPath) and the FAKE_QPDF_* variables set, act as qpdf
+        // instead of re-running the suite. Mirrors the Core.Tests harness pattern.
+        if (args.Contains("--check") && Environment.GetEnvironmentVariable("FAKE_QPDF_CHECK_FAIL") is { } checkCoded)
+        {
+            return int.TryParse(checkCoded, out var checkExit) ? checkExit : 2;
+        }
+
+        if (args.Contains("--qdf") && Environment.GetEnvironmentVariable("FAKE_QPDF_QDF_JPEG") is { } fakeJpegPath)
+        {
+            return RunFakeQdf(args, fakeJpegPath);
+        }
+
         var failures = 0;
         var tests = new (string Name, Func<Task> Run)[]
         {
@@ -36,6 +49,10 @@ public static class Program
             ("Staged runner skips pre-pass when resolution is Original", StagedRunnerSkipsPrePassWhenOriginal),
             ("Staged runner feeds downsampled path and deletes workspace", StagedRunnerFeedsDownsampledPath),
             ("Staged runner falls through on pre-pass refusal", StagedRunnerFallsThroughOnRefusal),
+            ("Staged runner deletes workspace when main run fails", StagedRunnerDeletesWorkspaceWhenMainRunFails),
+            ("Staged runner deletes workspace when main run cancelled", StagedRunnerDeletesWorkspaceWhenMainRunCancelled),
+            ("Staged runner propagates pre-pass cancel without main run", StagedRunnerPropagatesPrePassCancel),
+            ("Downsample falls back when --check fails", DownsampleFallsBackWhenCheckFails),
         };
 
         foreach (var test in tests)
@@ -309,6 +326,147 @@ public static class Program
         Assert(!vm.IsBusy && !vm.IsDownsampling, "busy flags cleared");
     }
 
+    private static async Task StagedRunnerDeletesWorkspaceWhenMainRunFails()
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-downsample-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        var fakeQdf = Path.Combine(workspace, "work.qdf");
+        await File.WriteAllTextAsync(fakeQdf, "fake");
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+                Task.FromException<OperationOutcome>(new InvalidOperationException("main boom")),
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+                Task.FromResult(new Operations.DownsampleResult(true, fakeQdf, 1, 1)));
+        try
+        {
+            await runner.RunAsync(
+                new Operations.StagedCompressInput("q.pdf", "in.pdf", "o.pdf", 150, 75, true, false),
+                null, null, CancellationToken.None);
+            Assert(false, "main-run failure must propagate");
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        Assert(!Directory.Exists(workspace), "workspace must be deleted after main-run failure");
+    }
+
+    private static async Task StagedRunnerDeletesWorkspaceWhenMainRunCancelled()
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-downsample-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        var fakeQdf = Path.Combine(workspace, "work.qdf");
+        await File.WriteAllTextAsync(fakeQdf, "fake");
+        using var cts = new CancellationTokenSource();
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+                Task.FromException<OperationOutcome>(new OperationCanceledException(cts.Token)),
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+                Task.FromResult(new Operations.DownsampleResult(true, fakeQdf, 1, 1)));
+        try
+        {
+            await runner.RunAsync(
+                new Operations.StagedCompressInput("q.pdf", "in.pdf", "o.pdf", 150, 75, true, false),
+                null, null, cts.Token);
+            Assert(false, "cancel must propagate");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        Assert(!Directory.Exists(workspace), "workspace must be deleted after main-run cancel");
+    }
+
+    private static async Task StagedRunnerPropagatesPrePassCancel()
+    {
+        var mainCalled = false;
+        using var cts = new CancellationTokenSource();
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+            {
+                mainCalled = true;
+                return Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok"));
+            },
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+                Task.FromException<Operations.DownsampleResult>(new OperationCanceledException(cts.Token)));
+        try
+        {
+            await runner.RunAsync(
+                new Operations.StagedCompressInput("q.pdf", "in.pdf", "o.pdf", 150, 75, true, false),
+                null, null, cts.Token);
+            Assert(false, "pre-pass cancel must propagate");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        Assert(!mainCalled, "main run must not start after pre-pass cancel");
+    }
+
+    private static async Task DownsampleFallsBackWhenCheckFails()
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        var jpegPath = Path.Combine(workspace, "scan.jpg");
+        await File.WriteAllBytesAsync(jpegPath, BuildGradientJpeg(1200, 1500, 92));
+        Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_JPEG", jpegPath);
+        Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_WIDTH", "1200");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_HEIGHT", "1500");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_CHECK_FAIL", "2");
+        try
+        {
+            // Self as qpdf: --qdf emits a hand-built QDF with one downsampleable
+            // image; --check exits 2, so the service must report not-applied.
+            var result = await Operations.ScanDownsampleService.DownsampleAsync(
+                Environment.ProcessPath!, Path.Combine(workspace, "in.pdf"), 100, 75, null, CancellationToken.None);
+            Assert(!result.Applied, "failed --check must fall back to not-applied");
+            Assert(result.ImagesConsidered == 1, "splice path must have run before the --check gate");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_JPEG", null);
+            Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_WIDTH", null);
+            Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_HEIGHT", null);
+            Environment.SetEnvironmentVariable("FAKE_QPDF_CHECK_FAIL", null);
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    // Fake-qpdf --qdf handler: emits a minimal QDF embedding the JPEG named by
+    // FAKE_QPDF_QDF_JPEG so the real parser/splice path runs without real qpdf.
+    private static int RunFakeQdf(string[] args, string jpegPath)
+    {
+        var output = args.LastOrDefault(a => !a.StartsWith('-'));
+        if (output is null)
+        {
+            return 2;
+        }
+
+        var jpeg = File.ReadAllBytes(jpegPath);
+        var width = int.TryParse(Environment.GetEnvironmentVariable("FAKE_QPDF_QDF_WIDTH"), out var w) ? w : 1200;
+        var height = int.TryParse(Environment.GetEnvironmentVariable("FAKE_QPDF_QDF_HEIGHT"), out var h) ? h : 1500;
+        const string content = "q 612 0 0 792 0 0 cm /Im1 Do Q";
+        var latin1 = System.Text.Encoding.Latin1;
+        using var file = File.Create(output);
+        void Write(string value)
+        {
+            var encoded = latin1.GetBytes(value);
+            file.Write(encoded, 0, encoded.Length);
+        }
+
+        Write("%PDF-1.7\n%QDF-1.0\n");
+        Write("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        Write("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        Write("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R " +
+            "/Resources << /XObject << /Im1 5 0 R >> >> >>\nendobj\n");
+        Write($"4 0 obj\n<< /Length {latin1.GetByteCount(content)} >>\nstream\n{content}\nendstream\nendobj\n");
+        Write($"5 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} " +
+            $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {jpeg.Length} >>\nstream\n");
+        file.Write(jpeg, 0, jpeg.Length);
+        Write("\nendstream\nendobj\n");
+        return 0;
+    }
+
     private static async Task CompressForwardsOriginalResolution()
     {
         var called = false;
@@ -368,22 +526,49 @@ public static class Program
         Assert(vm.DownsampleNote.Contains("No large scans found"), $"note missing: {vm.DownsampleNote}");
     }
 
+    // Progress<T> posts callbacks asynchronously, so without a controlled context
+    // this test could pass without ever observing a transition. Inline execution
+    // makes every Report deterministic on the calling thread.
+    private sealed class InlineSynchronizationContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback callback, object? state) => callback(state);
+    }
+
     private static async Task CompressPhaseChannelResetsFlag()
     {
-        var vm = new Operations.CompressViewModel(
-            (input, progress, phase, cancellationToken) =>
+        var prior = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(new InlineSynchronizationContext());
+        try
+        {
+            var transitions = new List<bool>();
+            var vm = new Operations.CompressViewModel(
+                (input, progress, phase, cancellationToken) =>
+                {
+                    phase?.Report(true);
+                    phase?.Report(false);
+                    return Task.FromResult(new Operations.StagedCompressResult(
+                        new OperationOutcome(true, false, 5, string.Empty, "ok"), string.Empty));
+                });
+            vm.PropertyChanged += (_, e) =>
             {
-                phase?.Report(true);
-                phase?.Report(false);
-                return Task.FromResult(new Operations.StagedCompressResult(
-                    new OperationOutcome(true, false, 5, string.Empty, "ok"), string.Empty));
-            });
-        vm.InputPath = "in.pdf";
-        vm.OutputPath = "o.pdf";
-        vm.MaxResolutionDpi = 150;
-        await vm.RunCommand.ExecuteAsync(null);
-        Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
-        Assert(!vm.IsDownsampling, "phase channel resets flag");
+                if (e.PropertyName == nameof(Operations.CompressViewModel.IsDownsampling))
+                {
+                    transitions.Add(vm.IsDownsampling);
+                }
+            };
+            vm.InputPath = "in.pdf";
+            vm.OutputPath = "o.pdf";
+            vm.MaxResolutionDpi = 150;
+            await vm.RunCommand.ExecuteAsync(null);
+            Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
+            Assert(transitions.Contains(true), "must observe the downsampling phase turn on");
+            Assert(transitions.Count > 0 && transitions[^1] == false, "phase channel resets flag last");
+            Assert(!vm.IsDownsampling, "final flag state is off");
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(prior);
+        }
     }
 
     private static async Task CompressClearsFlagsWhenStagedThrows()
