@@ -292,6 +292,15 @@ public static class Program
                 var after = new FileInfo(compressed).Length;
                 Console.WriteLine($"SIZE {before} -> {after} ({(double)after / before:P0})");
                 Assert((double)after / before < 0.6, $"expected <60% of original, got {after} of {before}");
+                // Default user path runs linearized: measure its overhead on the same fixture.
+                var linearized = Path.Combine(workspace, "scan-linearized.pdf");
+                var linOutcome = await QpdfOperationService.RunAsync(
+                    new CompressRequest(qpdf, result.QdfPath!, true, linearized, 75),
+                    null, CancellationToken.None, true);
+                Assert(linOutcome.Succeeded, linOutcome.Details);
+                var linAfter = new FileInfo(linearized).Length;
+                Console.WriteLine($"SIZE-LIN {before} -> {linAfter} ({(double)linAfter / before:P0})");
+                Assert((double)linAfter / before < 0.6, $"linearized expected <60% of original, got {linAfter} of {before}");
             }
             finally
             {
