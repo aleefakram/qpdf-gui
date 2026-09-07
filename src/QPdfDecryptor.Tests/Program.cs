@@ -30,7 +30,7 @@ public static class Program
             ("Compress skips pre-pass when resolution is Original", CompressSkipsPrePassWhenOriginal),
             ("Downsample resolves indirect Resources maps", DownsampleResolvesIndirectResources),
             ("Compress reports note when nothing qualified", CompressNoteWhenNothingQualified),
-            ("Compress pre-pass refusal falls through to main run", CompressPrePassRefusalFallsThrough),
+            ("Compress phase channel resets after run", CompressPhaseChannelResetsFlag),
             ("Staged runner skips pre-pass when resolution is Original", StagedRunnerSkipsPrePassWhenOriginal),
             ("Staged runner feeds downsampled path and deletes workspace", StagedRunnerFeedsDownsampledPath),
             ("Staged runner falls through on pre-pass refusal", StagedRunnerFallsThroughOnRefusal),
@@ -285,44 +285,43 @@ public static class Program
 
     private static async Task CompressPrePassFeedsDownsampledPath()
     {
-        CompressRequest? seen = null;
-        var fakeQdf = Path.Combine(Path.GetTempPath(), "fake-downsampled.qdf");
+        Operations.StagedCompressInput? seen = null;
         var vm = new Operations.CompressViewModel(
-            (request, allowOverwrite, progress, cancellationToken) =>
+            (input, progress, phase, cancellationToken) =>
             {
-                seen = request;
-                return Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok"));
-            },
-            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
-            {
-                Assert(inputPath == "in.pdf" && maxDpi == 150 && jpegQuality == 75, "pre-pass got wrong inputs");
-                return Task.FromResult(new Operations.DownsampleResult(true, fakeQdf, 1, 1));
+                seen = input;
+                Assert(input.InputPath == "in.pdf" && input.MaxResolutionDpi == 150
+                    && input.JpegQuality == 75 && input.AllowOverwrite == false, "staged got wrong inputs");
+                return Task.FromResult(new Operations.StagedCompressResult(
+                    new OperationOutcome(true, false, 5, string.Empty, "ok"), "Downsampled 1 scan image to 150 DPI first."));
             });
         vm.InputPath = "in.pdf";
         vm.OutputPath = "o.pdf";
         vm.MaxResolutionDpi = 150;
         await vm.RunCommand.ExecuteAsync(null);
-        Assert(seen is not null && seen.InputPath == fakeQdf, "run must use the downsampled file");
+        Assert(seen is not null && seen.OutputPath == "o.pdf", "staged input forwarded");
         Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
         Assert(vm.DownsampleNote.Contains("Downsampled 1 scan image"), $"note missing: {vm.DownsampleNote}");
+        Assert(!vm.IsBusy && !vm.IsDownsampling, "busy flags cleared");
     }
 
     private static async Task CompressSkipsPrePassWhenOriginal()
     {
-        var prePassCalled = false;
+        var called = false;
         var vm = new Operations.CompressViewModel(
-            (request, allowOverwrite, progress, cancellationToken) =>
-                Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok")),
-            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+            (input, progress, phase, cancellationToken) =>
             {
-                prePassCalled = true;
-                return Task.FromResult(new Operations.DownsampleResult(false, null, 0, 0));
+                called = true;
+                Assert(input.MaxResolutionDpi == 0, "resolution forwarded");
+                return Task.FromResult(new Operations.StagedCompressResult(
+                    new OperationOutcome(true, false, 5, string.Empty, "ok"), string.Empty));
             });
         vm.InputPath = "in.pdf";
         vm.OutputPath = "o.pdf";
         Assert(vm.MaxResolutionDpi == 0, "default must be Original");
         await vm.RunCommand.ExecuteAsync(null);
-        Assert(!prePassCalled, "pre-pass must not run when resolution is Original");
+        Assert(called, "staged run invoked");
+        Assert(vm.DownsampleNote.Length == 0, "no note when pre-pass skipped");
     }
 
     private static Task DownsampleResolvesIndirectResources()
@@ -355,10 +354,9 @@ public static class Program
     private static async Task CompressNoteWhenNothingQualified()
     {
         var vm = new Operations.CompressViewModel(
-            (request, allowOverwrite, progress, cancellationToken) =>
-                Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok")),
-            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
-                Task.FromResult(new Operations.DownsampleResult(false, null, 0, 0)));
+            (input, progress, phase, cancellationToken) =>
+                Task.FromResult(new Operations.StagedCompressResult(
+                    new OperationOutcome(true, false, 5, string.Empty, "ok"), "No large scans found — compressed without downsampling.")));
         vm.InputPath = "in.pdf";
         vm.OutputPath = "o.pdf";
         vm.MaxResolutionDpi = 150;
@@ -366,26 +364,22 @@ public static class Program
         Assert(vm.DownsampleNote.Contains("No large scans found"), $"note missing: {vm.DownsampleNote}");
     }
 
-    private static async Task CompressPrePassRefusalFallsThrough()
+    private static async Task CompressPhaseChannelResetsFlag()
     {
-        CompressRequest? seen = null;
         var vm = new Operations.CompressViewModel(
-            (request, allowOverwrite, progress, cancellationToken) =>
+            (input, progress, phase, cancellationToken) =>
             {
-                seen = request;
-                return Task.FromResult(new OperationOutcome(false, false, null,
-                    "This PDF is password-protected. Use Decrypt first.", "probe refused"));
-            },
-            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
-                Task.FromException<Operations.DownsampleResult>(
-                    new InvalidOperationException("This PDF is password-protected. Use Decrypt first.")));
+                phase?.Report(true);
+                phase?.Report(false);
+                return Task.FromResult(new Operations.StagedCompressResult(
+                    new OperationOutcome(true, false, 5, string.Empty, "ok"), string.Empty));
+            });
         vm.InputPath = "in.pdf";
         vm.OutputPath = "o.pdf";
         vm.MaxResolutionDpi = 150;
-        await vm.RunCommand.ExecuteAsync(null); // must not throw: refusal surfaces as Outcome
-        Assert(seen is not null && seen.InputPath == "in.pdf", "main run must get the original input");
-        Assert(vm.Outcome?.FriendlyError.Contains("password-protected") == true, "refusal must surface");
-        Assert(!vm.IsBusy && !vm.IsDownsampling, "busy flags cleared");
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
+        Assert(!vm.IsDownsampling, "phase channel resets flag");
     }
 
     private static async Task StagedRunnerSkipsPrePassWhenOriginal()

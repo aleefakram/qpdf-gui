@@ -6,23 +6,21 @@ namespace QPdfDecryptor.Operations;
 
 public partial class CompressViewModel : ObservableObject, IBusyPage
 {
-    internal delegate Task<DownsampleResult> DownsampleStep(string qpdfPath, string inputPath,
-        int maxDpi, int jpegQuality, IProgress<int>? progress, CancellationToken cancellationToken);
+    internal delegate Task<StagedCompressResult> StagedRun(
+        StagedCompressInput input, IProgress<int>? progress, IProgress<bool>? isDownsampling,
+        CancellationToken cancellationToken);
 
-    private readonly Func<CompressRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>> run;
-    private readonly DownsampleStep downsample;
+    private readonly StagedRun staged;
 
     public CompressViewModel(Func<CompressRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
-        : this(run, null)
+        : this((input, progress, phase, cancellationToken) =>
+            new StagedCompressRunner(run).RunAsync(input, progress, phase, cancellationToken))
     {
     }
 
-    internal CompressViewModel(Func<CompressRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run,
-        DownsampleStep? downsample)
+    internal CompressViewModel(StagedRun staged)
     {
-        this.run = run ?? ((request, allowOverwrite, progress, cancellationToken) =>
-            QpdfOperationService.RunAsync(request, progress, cancellationToken, allowOverwrite));
-        this.downsample = downsample ?? ScanDownsampleService.DownsampleAsync;
+        this.staged = staged;
     }
 
     [ObservableProperty]
@@ -80,63 +78,20 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
         StatusPercent = 0;
         DownsampleNote = string.Empty;
         IsBusy = true;
-        string? downsampled = null;
         try
         {
-            var inputPath = InputPath;
-            if (MaxResolutionDpi > 0)
-            {
-                IsDownsampling = true;
-                try
-                {
-                    var progress = new Progress<int>(value => StatusPercent = value);
-                    try
-                    {
-                        var step = await downsample(QpdfLocator.Path, InputPath,
-                            MaxResolutionDpi, ImageQualityPercent, progress, cancellationToken);
-                        if (step.Applied && step.QdfPath is not null)
-                        {
-                            inputPath = step.QdfPath;
-                            downsampled = step.QdfPath;
-                            DownsampleNote = $"Downsampled {step.ImagesDownsampled} scan " +
-                                $"image{(step.ImagesDownsampled == 1 ? string.Empty : "s")} to {MaxResolutionDpi} DPI first.";
-                        }
-                        else if (step.ImagesConsidered > 0)
-                        {
-                            DownsampleNote = "Scans found but already at or below " +
-                                $"{MaxResolutionDpi} DPI — compressed without downsampling.";
-                        }
-                        else
-                        {
-                            DownsampleNote = "No large scans found — compressed without downsampling.";
-                        }
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // Unreadable or encrypted input: skip the pre-pass and let the
-                        // main pipeline refuse it with the standard friendly message
-                        // (surfacing as an Outcome, never as an exception).
-                    }
-                }
-                finally
-                {
-                    IsDownsampling = false;
-                    StatusPercent = 0;
-                }
-            }
-
-            Outcome = await run(new CompressRequest(QpdfLocator.Path, inputPath,
-                LinearizeForWeb, OutputPath, ImageQualityPercent), AllowOverwrite,
-                new Progress<int>(value => StatusPercent = value), cancellationToken);
+            var progress = new Progress<int>(value => StatusPercent = value);
+            var phase = new Progress<bool>(value => IsDownsampling = value);
+            var result = await staged(new StagedCompressInput(QpdfLocator.Path, InputPath, OutputPath,
+                MaxResolutionDpi, ImageQualityPercent, LinearizeForWeb, AllowOverwrite),
+                progress, phase, cancellationToken);
+            Outcome = result.Outcome;
+            DownsampleNote = result.Note;
         }
         finally
         {
             IsBusy = false;
             AllowOverwrite = false;
-            if (downsampled is not null)
-            {
-                ScanDownsampleService.DeleteWorkspaceFor(downsampled);
-            }
         }
     }
 
