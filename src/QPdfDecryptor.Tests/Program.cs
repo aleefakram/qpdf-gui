@@ -37,6 +37,7 @@ public static class Program
             ("Downsample image dict filter skips masks", DownsampleImageDictFilter),
             ("Downsample targets flag oversized scans", DownsampleTargetsFlagOversized),
             ("Downsample targets skip content under the cap", DownsampleTargetsSkipWhenUnderCap),
+            ("Downsample targets Flate images for re-encode", DownsampleTargetsFlateForReencode),
             ("Downsample rewrite dict updates dimensions", DownsampleRewriteDict),
             ("Downsample decodes Flate RGB image", DownsampleDecodesFlateRgb),
             ("Downsample decodes Flate gray image", DownsampleDecodesFlateGray),
@@ -252,6 +253,74 @@ public static class Program
         var targets = Operations.ScanDownsampleService.FindDownsampleTargets(objects, SyntheticQdf, 150);
         Assert(targets.Count == 0, "141 DPI scan must be untouched at 150 DPI cap");
         return Task.CompletedTask;
+    }
+
+    private static async Task DownsampleTargetsFlateForReencode()
+    {
+        const int width = 1200;
+        const int height = 1500;
+        var pixels = new byte[width * height * 3];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var i = (y * width + x) * 3;
+                pixels[i] = (byte)(x * 255 / width);
+                pixels[i + 1] = (byte)(y * 255 / height);
+                pixels[i + 2] = 128;
+            }
+        }
+
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(pixels, 0, pixels.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            var qdf = Path.Combine(workspace, "flate.qdf");
+            var latin1 = System.Text.Encoding.Latin1;
+            using (var file = File.Create(qdf))
+            {
+                void Write(string value)
+                {
+                    var encoded = latin1.GetBytes(value);
+                    file.Write(encoded, 0, encoded.Length);
+                }
+
+                const string content = "q 612 0 0 792 0 0 cm /Im1 Do Q";
+                Write("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+                Write("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+                Write("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R " +
+                    "/Resources << /XObject << /Im1 5 0 R >> >> >>\nendobj\n");
+                Write($"4 0 obj\n<< /Length {latin1.GetByteCount(content)} >>\nstream\n{content}\nendstream\nendobj\n");
+                Write($"5 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} " +
+                    $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {compressed.Length} >>\nstream\n");
+                file.Write(compressed, 0, compressed.Length);
+                Write("\nendstream\nendobj\n");
+            }
+
+            var modified = Operations.ScanDownsampleService.TryDownsampleQdf(
+                qdf, 100, 75, null, CancellationToken.None);
+            Assert(modified.ImagesDownsampled == 1, $"expected 1 rewrite, got {modified.ImagesDownsampled}");
+            var spliced = await File.ReadAllBytesAsync(qdf);
+            Assert(spliced.Length < compressed.Length + 4096, $"spliced QDF not smaller: {spliced.Length}");
+            var splicedText = System.Text.Encoding.Latin1.GetString(spliced);
+            Assert(splicedText.Contains("/Filter /DCTDecode") && splicedText.Contains("/Width 849"),
+                "spliced dict must be normalized JPEG dims");
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
     }
 
     private static Task DownsampleRewriteDict()

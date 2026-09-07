@@ -10,7 +10,8 @@ namespace QPdfDecryptor.Operations;
 
 // Phase 1 scan compression: downsample oversized color/gray JPEG images via
 // qpdf QDF surgery, then let the normal compress pipeline run on the result.
-// v1 limits: DCTDecode (JPEG) images only, drawn via a direct "cm ... Do"
+// v1 limits: DCTDecode (JPEG) and FlateDecode (direct RGB/gray, indexed)
+// images only, drawn via a direct "cm ... Do"
 // pair in a top-level page content stream. Skipped (left untouched):
 // monochrome masks, soft-masked images, inline images, form-nested images,
 // non-RGB/gray decodes, and images too small to matter.
@@ -163,7 +164,9 @@ internal static class ScanDownsampleService
             var image = objects[objectNumber];
             var streamBytes = new byte[image.StreamLength];
             Buffer.BlockCopy(bytes, image.StreamOffset, streamBytes, 0, image.StreamLength);
-            var replacement = TryReencode(streamBytes, target.Width, target.Height, jpegQuality);
+            var dictText = text.Substring(image.DictOffset, image.DictLength);
+            var replacement = TryReencode(streamBytes, dictText, target.Width, target.Height, jpegQuality,
+                number => FindRawObject(text, number));
             if (replacement is not null)
             {
                 replacements.Add(new ImageReplacement(objectNumber, replacement.Bytes, target.Width, target.Height, replacement.Gray));
@@ -317,6 +320,16 @@ internal static class ScanDownsampleService
         var valueStart = refHeader.Index + refHeader.Length;
         var valueMatch = Regex.Match(fullText.Substring(valueStart, Math.Min(64, fullText.Length - valueStart)), @"\s*(\d+)");
         return valueMatch.Success ? int.Parse(valueMatch.Groups[1].Value) : null;
+    }
+
+    // Ad-hoc raw-object lookup for small text-valued references (palette
+    // streams, DecodeParms). Limitation: a binary stream containing "endobj"
+    // can truncate the match — acceptable because only small text-valued
+    // lookups are resolved this way.
+    internal static string? FindRawObject(string text, int number)
+    {
+        var match = Regex.Match(text, $@"(?<!\d){number}\s+\d+\s+obj\b(.*? )endobj", RegexOptions.Singleline);
+        return match.Success ? match.Groups[1].Value : null;
     }
 
     private static int SkipWhitespace(string text, int index, int limit)
@@ -599,37 +612,54 @@ internal static class ScanDownsampleService
         return match.Success && int.TryParse(match.Groups[1].Value, out var value) ? value : null;
     }
 
-    private static ReencodedImage? TryReencode(byte[] source, int targetWidth, int targetHeight, int jpegQuality)
+    private static ReencodedImage? TryReencode(byte[] source, string dictText, int targetWidth, int targetHeight,
+        int jpegQuality, Func<int, string?> refResolver)
     {
-        if (source.Length < 2 || source[0] != 0xFF || source[1] != 0xD8)
-        {
-            return null; // JPEG only in v1
-        }
-
         try
         {
-            using var input = new MemoryStream(source, writable: false);
-            var decoder = new JpegBitmapDecoder(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-            if (decoder.Frames.Count == 0)
+            BitmapSource bitmap;
+            bool gray;
+            if (source.Length >= 2 && source[0] == 0xFF && source[1] == 0xD8)
+            {
+                using var input = new MemoryStream(source, writable: false);
+                var decoder = new JpegBitmapDecoder(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+                if (decoder.Frames.Count == 0)
+                {
+                    return null;
+                }
+
+                var frame = decoder.Frames[0];
+                gray = frame.Format == PixelFormats.Gray8;
+                if (!gray && frame.Format != PixelFormats.Bgr24 && frame.Format != PixelFormats.Bgr32 &&
+                    frame.Format != PixelFormats.Bgra32)
+                {
+                    return null; // CMYK and friends: leave alone rather than shift colors
+                }
+
+                bitmap = frame;
+            }
+            else
+            {
+                var decoded = DecodeFlateImage(source, dictText, refResolver);
+                if (decoded is null)
+                {
+                    return null;
+                }
+
+                gray = decoded.Gray;
+                bitmap = BitmapSource.Create(decoded.Width, decoded.Height, 96, 96,
+                    gray ? PixelFormats.Gray8 : PixelFormats.Bgr24, null,
+                    decoded.Pixels, decoded.Width * (gray ? 1 : 3));
+                bitmap.Freeze();
+            }
+
+            if (bitmap.PixelWidth <= targetWidth && bitmap.PixelHeight <= targetHeight)
             {
                 return null;
             }
 
-            var frame = decoder.Frames[0];
-            var gray = frame.Format == PixelFormats.Gray8;
-            if (!gray && frame.Format != PixelFormats.Bgr24 && frame.Format != PixelFormats.Bgr32 &&
-                frame.Format != PixelFormats.Bgra32)
-            {
-                return null; // CMYK and friends: leave alone rather than shift colors
-            }
-
-            if (frame.PixelWidth <= targetWidth && frame.PixelHeight <= targetHeight)
-            {
-                return null;
-            }
-
-            var scaled = new TransformedBitmap(frame, new ScaleTransform(
-                targetWidth / (double)frame.PixelWidth, targetHeight / (double)frame.PixelHeight));
+            var scaled = new TransformedBitmap(bitmap, new ScaleTransform(
+                targetWidth / (double)bitmap.PixelWidth, targetHeight / (double)bitmap.PixelHeight));
             scaled.Freeze();
 
             var encoder = new JpegBitmapEncoder { QualityLevel = Math.Clamp(jpegQuality, 1, 100) };
