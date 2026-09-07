@@ -32,6 +32,7 @@ public static class Program
             ("Compress reports note when nothing qualified", CompressNoteWhenNothingQualified),
             ("Compress pre-pass refusal falls through to main run", CompressPrePassRefusalFallsThrough),
             ("Staged runner skips pre-pass when resolution is Original", StagedRunnerSkipsPrePassWhenOriginal),
+            ("Staged runner feeds downsampled path and deletes workspace", StagedRunnerFeedsDownsampledPath),
         };
 
         foreach (var test in tests)
@@ -403,6 +404,32 @@ public static class Program
         Assert(!prePassCalled, "pre-pass must not run when resolution is Original");
         Assert(result.Outcome.Succeeded, "outcome forwarded");
         Assert(result.Note.Length == 0, "note empty when pre-pass skipped");
+    }
+
+    private static async Task StagedRunnerFeedsDownsampledPath()
+    {
+        CompressRequest? seen = null;
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-downsample-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        var fakeQdf = Path.Combine(workspace, "work.qdf");
+        await File.WriteAllTextAsync(fakeQdf, "fake");
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+            {
+                seen = request;
+                return Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok"));
+            },
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+            {
+                Assert(inputPath == "in.pdf" && maxDpi == 150 && jpegQuality == 75, "pre-pass got wrong inputs");
+                return Task.FromResult(new Operations.DownsampleResult(true, fakeQdf, 1, 1));
+            });
+        var result = await runner.RunAsync(
+            new Operations.StagedCompressInput("q.pdf", "in.pdf", "o.pdf", 150, 75, true, false),
+            null, null, CancellationToken.None);
+        Assert(seen is not null && seen.InputPath == fakeQdf, "run must use the downsampled file");
+        Assert(result.Note.Contains("Downsampled 1 scan image"), $"note missing: {result.Note}");
+        Assert(!Directory.Exists(workspace), "workspace must be deleted after success");
     }
 
     private static string? FindRepoQpdf()
