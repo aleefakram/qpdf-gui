@@ -33,6 +33,7 @@ public static class Program
             ("Compress pre-pass refusal falls through to main run", CompressPrePassRefusalFallsThrough),
             ("Staged runner skips pre-pass when resolution is Original", StagedRunnerSkipsPrePassWhenOriginal),
             ("Staged runner feeds downsampled path and deletes workspace", StagedRunnerFeedsDownsampledPath),
+            ("Staged runner falls through on pre-pass refusal", StagedRunnerFallsThroughOnRefusal),
         };
 
         foreach (var test in tests)
@@ -430,6 +431,27 @@ public static class Program
         Assert(seen is not null && seen.InputPath == fakeQdf, "run must use the downsampled file");
         Assert(result.Note.Contains("Downsampled 1 scan image"), $"note missing: {result.Note}");
         Assert(!Directory.Exists(workspace), "workspace must be deleted after success");
+    }
+
+    private static async Task StagedRunnerFallsThroughOnRefusal()
+    {
+        CompressRequest? seen = null;
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+            {
+                seen = request;
+                return Task.FromResult(new OperationOutcome(false, false, null,
+                    "This PDF is password-protected. Use Decrypt first.", "probe refused"));
+            },
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+                Task.FromException<Operations.DownsampleResult>(
+                    new InvalidOperationException("This PDF is password-protected. Use Decrypt first.")));
+        var result = await runner.RunAsync(
+            new Operations.StagedCompressInput("q.pdf", "in.pdf", "o.pdf", 150, 75, true, false),
+            null, null, CancellationToken.None); // must not throw
+        Assert(seen is not null && seen.InputPath == "in.pdf", "main run must get the original input");
+        Assert(result.Outcome.FriendlyError.Contains("password-protected"), "refusal must surface");
+        Assert(result.Note.Length == 0, "no note on fall-through");
     }
 
     private static string? FindRepoQpdf()

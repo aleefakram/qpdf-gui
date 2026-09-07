@@ -46,24 +46,37 @@ internal sealed class StagedCompressRunner
                 isDownsampling?.Report(true);
                 try
                 {
-                    var step = await downsample(input.QpdfPath, input.InputPath,
-                        input.MaxResolutionDpi, input.JpegQuality, progress, cancellationToken);
-                    if (step.Applied && step.QdfPath is not null)
+                    DownsampleResult? step;
+                    try
+                    {
+                        step = await downsample(input.QpdfPath, input.InputPath,
+                            input.MaxResolutionDpi, input.JpegQuality, progress, cancellationToken);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Unreadable or encrypted input: skip the pre-pass and let the
+                        // main run refuse it with the standard friendly message.
+                        // (OperationCanceledException is NOT caught: cancel must propagate.)
+                        step = null;
+                    }
+
+                    if (step is not null && step.Applied && step.QdfPath is not null)
                     {
                         effectiveInput = step.QdfPath;
                         downsampled = step.QdfPath;
                         note = $"Downsampled {step.ImagesDownsampled} scan " +
                             $"image{(step.ImagesDownsampled == 1 ? string.Empty : "s")} to {input.MaxResolutionDpi} DPI first.";
                     }
-                    else if (step.ImagesConsidered > 0)
+                    else if (step is not null && step.ImagesConsidered > 0)
                     {
                         note = "Scans found but already at or below " +
                             $"{input.MaxResolutionDpi} DPI — compressed without downsampling.";
                     }
-                    else
+                    else if (step is not null)
                     {
                         note = "No large scans found — compressed without downsampling.";
                     }
+                    // step is null means pre-pass refused: note stays empty, main run refuses.
                 }
                 finally
                 {
