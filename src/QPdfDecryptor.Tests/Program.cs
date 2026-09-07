@@ -53,6 +53,8 @@ public static class Program
             ("Staged runner deletes workspace when main run cancelled", StagedRunnerDeletesWorkspaceWhenMainRunCancelled),
             ("Staged runner propagates pre-pass cancel without main run", StagedRunnerPropagatesPrePassCancel),
             ("Downsample falls back when --check fails", DownsampleFallsBackWhenCheckFails),
+            ("Downsample deletes workspace when pre-pass cancelled", DownsampleDeletesWorkspaceWhenPrePassCancelled),
+            ("Staged runner feeds original input after check fallback", StagedRunnerFeedsOriginalInputAfterCheckFallback),
         };
 
         foreach (var test in tests)
@@ -421,6 +423,84 @@ public static class Program
                 Environment.ProcessPath!, Path.Combine(workspace, "in.pdf"), 100, 75, null, CancellationToken.None);
             Assert(!result.Applied, "failed --check must fall back to not-applied");
             Assert(result.ImagesConsidered == 1, "splice path must have run before the --check gate");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_JPEG", null);
+            Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_WIDTH", null);
+            Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_HEIGHT", null);
+            Environment.SetEnvironmentVariable("FAKE_QPDF_CHECK_FAIL", null);
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    private static async Task DownsampleDeletesWorkspaceWhenPrePassCancelled()
+    {
+        var qpdf = FindRepoQpdf();
+        if (qpdf is null)
+        {
+            Console.WriteLine("SKIP qpdf.exe not found under repo Native/");
+            return;
+        }
+
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            var pdf = Path.Combine(workspace, "scan.pdf");
+            WriteMinimalImagePdf(pdf, BuildGradientJpeg(1800, 2250, 92), 1800, 2250);
+            var before = new HashSet<string>(Directory.GetDirectories(Path.GetTempPath(), "pdf-ninja-downsample-*"));
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+            try
+            {
+                await Operations.ScanDownsampleService.DownsampleAsync(
+                    qpdf, pdf, 150, 75, null, cts.Token);
+                Assert(false, "cancel must propagate");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            var leaked = Directory.GetDirectories(Path.GetTempPath(), "pdf-ninja-downsample-*")
+                .Where(d => !before.Contains(d)).ToList();
+            Assert(leaked.Count == 0, $"workspace leaked: {string.Join(",", leaked)}");
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    private static async Task StagedRunnerFeedsOriginalInputAfterCheckFallback()
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        var jpegPath = Path.Combine(workspace, "scan.jpg");
+        await File.WriteAllBytesAsync(jpegPath, BuildGradientJpeg(1200, 1500, 92));
+        var inputPdf = Path.Combine(workspace, "in.pdf");
+        await File.WriteAllTextAsync(inputPdf, "input stays untouched");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_JPEG", jpegPath);
+        Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_WIDTH", "1200");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_QDF_HEIGHT", "1500");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_CHECK_FAIL", "2");
+        try
+        {
+            // Real service (self as fake qpdf) + stubbed main run: the --check
+            // failure must hand the ORIGINAL input to the main stage.
+            CompressRequest? seen = null;
+            var runner = new Operations.StagedCompressRunner(
+                (request, allowOverwrite, progress, cancellationToken) =>
+                {
+                    seen = request;
+                    return Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok"));
+                });
+            var result = await runner.RunAsync(
+                new Operations.StagedCompressInput(Environment.ProcessPath!, inputPdf,
+                    Path.Combine(workspace, "o.pdf"), 100, 75, false, false),
+                null, null, CancellationToken.None);
+            Assert(seen is not null && seen.InputPath == inputPdf, "main run must receive the original input after fallback");
+            Assert(result.Note.Contains("already at or below"), $"note missing: {result.Note}");
         }
         finally
         {
