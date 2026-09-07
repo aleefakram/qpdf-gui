@@ -596,7 +596,7 @@ internal static class ScanDownsampleService
     private static int? MatchInt(string dictText, string key)
     {
         var match = Regex.Match(dictText, $@"/{key}\s+(\d+)");
-        return match.Success ? int.Parse(match.Groups[1].Value) : null;
+        return match.Success && int.TryParse(match.Groups[1].Value, out var value) ? value : null;
     }
 
     private static ReencodedImage? TryReencode(byte[] source, int targetWidth, int targetHeight, int jpegQuality)
@@ -728,8 +728,10 @@ internal static class ScanDownsampleService
         return new DecodedFlate(SwizzleRgbToBgr(samples), width.Value, height.Value, false);
     }
 
+    // Task 2/3 placeholder: indirect /DecodeParms resolution comes later
     private static string DecodeParmsText(string dictText, Func<int, string?> refResolver) => dictText;
 
+    // Task 3 placeholder: indexed colorspaces deferred
     private static bool TryDescribePixels(string dictText, Func<int, string?> refResolver, int width,
         out int components, out int indexBpc, out byte[]? palette, out bool gray)
     {
@@ -759,16 +761,17 @@ internal static class ScanDownsampleService
         return false;
     }
 
+    // Task 2 placeholder: only predictor 1 passes through yet
     private static byte[]? ApplyPredictor(byte[] raw, int width, int height, int rowBytes, int components, int predictor) =>
         predictor == 1 ? raw : null;
 
     private static DecodedFlate? ApplyPalette(byte[] samples, int width, int height, int indexBpc, byte[] palette, bool gray) =>
-        null; // Task 3 (in the full plan; NOT your task — leave the stub exactly as-is)
+        null; // Task 3: indexed palette expansion (deferred)
 
     private static byte[] SwizzleRgbToBgr(byte[] rgb)
     {
         var bgr = new byte[rgb.Length];
-        for (var i = 0; i + 2 < rgb.Length + 1; i += 3)
+        for (var i = 0; i + 2 < rgb.Length; i += 3)
         {
             bgr[i] = rgb[i + 2];
             bgr[i + 1] = rgb[i + 1];
