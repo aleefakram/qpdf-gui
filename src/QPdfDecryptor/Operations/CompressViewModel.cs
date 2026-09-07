@@ -12,14 +12,15 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
 
     private readonly StagedRun staged;
 
+    // Legacy seam: a bare run func is wrapped as the runner's inner stage; the downsample service is used by default.
     public CompressViewModel(Func<CompressRequest, bool, IProgress<int>?, CancellationToken, Task<OperationOutcome>>? run = null)
-        : this((input, progress, phase, cancellationToken) =>
-            new StagedCompressRunner(run).RunAsync(input, progress, phase, cancellationToken))
+        : this(new StagedCompressRunner(run).RunAsync)
     {
     }
 
     internal CompressViewModel(StagedRun staged)
     {
+        ArgumentNullException.ThrowIfNull(staged);
         this.staged = staged;
     }
 
@@ -91,6 +92,7 @@ public partial class CompressViewModel : ObservableObject, IBusyPage
         finally
         {
             IsBusy = false;
+            IsDownsampling = false;
             AllowOverwrite = false;
         }
     }

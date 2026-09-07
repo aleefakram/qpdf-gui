@@ -26,11 +26,13 @@ public static class Program
             ("Downsample targets skip content under the cap", DownsampleTargetsSkipWhenUnderCap),
             ("Downsample rewrite dict updates dimensions", DownsampleRewriteDict),
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
-            ("Compress pre-pass feeds downsampled path into run", CompressPrePassFeedsDownsampledPath),
-            ("Compress skips pre-pass when resolution is Original", CompressSkipsPrePassWhenOriginal),
+            ("Compress forwards staged input and surfaces note", CompressForwardsStagedInputAndSurfacesNote),
+            ("Compress forwards Original resolution to staged run", CompressForwardsOriginalResolution),
             ("Downsample resolves indirect Resources maps", DownsampleResolvesIndirectResources),
             ("Compress reports note when nothing qualified", CompressNoteWhenNothingQualified),
             ("Compress phase channel resets after run", CompressPhaseChannelResetsFlag),
+            ("Compress clears flags when staged run throws", CompressClearsFlagsWhenStagedThrows),
+            ("Compress public ctor wraps run func", CompressPublicCtorWrapsRunFunc),
             ("Staged runner skips pre-pass when resolution is Original", StagedRunnerSkipsPrePassWhenOriginal),
             ("Staged runner feeds downsampled path and deletes workspace", StagedRunnerFeedsDownsampledPath),
             ("Staged runner falls through on pre-pass refusal", StagedRunnerFallsThroughOnRefusal),
@@ -283,7 +285,7 @@ public static class Program
         }
     }
 
-    private static async Task CompressPrePassFeedsDownsampledPath()
+    private static async Task CompressForwardsStagedInputAndSurfacesNote()
     {
         Operations.StagedCompressInput? seen = null;
         var vm = new Operations.CompressViewModel(
@@ -291,7 +293,9 @@ public static class Program
             {
                 seen = input;
                 Assert(input.InputPath == "in.pdf" && input.MaxResolutionDpi == 150
-                    && input.JpegQuality == 75 && input.AllowOverwrite == false, "staged got wrong inputs");
+                    && input.JpegQuality == 75 && input.AllowOverwrite == false
+                    && input.OutputPath == "o.pdf" && input.LinearizeForWeb == true
+                    && input.QpdfPath.Length > 0, "staged got wrong inputs");
                 return Task.FromResult(new Operations.StagedCompressResult(
                     new OperationOutcome(true, false, 5, string.Empty, "ok"), "Downsampled 1 scan image to 150 DPI first."));
             });
@@ -305,7 +309,7 @@ public static class Program
         Assert(!vm.IsBusy && !vm.IsDownsampling, "busy flags cleared");
     }
 
-    private static async Task CompressSkipsPrePassWhenOriginal()
+    private static async Task CompressForwardsOriginalResolution()
     {
         var called = false;
         var vm = new Operations.CompressViewModel(
@@ -380,6 +384,42 @@ public static class Program
         await vm.RunCommand.ExecuteAsync(null);
         Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
         Assert(!vm.IsDownsampling, "phase channel resets flag");
+    }
+
+    private static async Task CompressClearsFlagsWhenStagedThrows()
+    {
+        var vm = new Operations.CompressViewModel(
+            (input, progress, phase, cancellationToken) =>
+                Task.FromException<Operations.StagedCompressResult>(new InvalidOperationException("boom")));
+        vm.InputPath = "in.pdf";
+        vm.OutputPath = "o.pdf";
+        vm.MaxResolutionDpi = 150;
+        try
+        {
+            await vm.RunCommand.ExecuteAsync(null);
+            Assert(false, "staged throw must propagate");
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        Assert(!vm.IsBusy && !vm.IsDownsampling, "flags cleared after throw");
+    }
+
+    private static async Task CompressPublicCtorWrapsRunFunc()
+    {
+        CompressRequest? seen = null;
+        var vm = new Operations.CompressViewModel(
+            (request, allowOverwrite, progress, cancellationToken) =>
+            {
+                seen = request;
+                return Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok"));
+            });
+        vm.InputPath = "in.pdf";
+        vm.OutputPath = "o.pdf";
+        await vm.RunCommand.ExecuteAsync(null); // MaxResolutionDpi defaults 0: pre-pass skipped, no qpdf needed
+        Assert(seen is not null && seen.InputPath == "in.pdf", "public ctor run func invoked with original input");
+        Assert(vm.Outcome?.Succeeded == true, "outcome surfaced");
     }
 
     private static async Task StagedRunnerSkipsPrePassWhenOriginal()
