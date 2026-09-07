@@ -652,7 +652,16 @@ internal static class ScanDownsampleService
             }
             else
             {
-                var decoded = DecodeFlateImage(source, dictText, refResolver);
+                DecodedFlate? decoded;
+                if (dictText.Contains("/Filter", StringComparison.Ordinal))
+                {
+                    decoded = DecodeFlateImage(source, dictText, refResolver);
+                }
+                else
+                {
+                    decoded = DecodeRawSamples(source, dictText, refResolver);
+                }
+
                 if (decoded is null)
                 {
                     return null;
@@ -727,6 +736,15 @@ internal static class ScanDownsampleService
             return null; // not a Flate stream
         }
 
+        return InterpretSamples(raw, dictText, refResolver, applyDecodeParms: true);
+    }
+
+    internal static DecodedFlate? DecodeRawSamples(byte[] raw, string dictText, Func<int, string?> refResolver) =>
+        InterpretSamples(raw, dictText, refResolver, applyDecodeParms: false);
+
+    internal static DecodedFlate? InterpretSamples(byte[] raw, string dictText, Func<int, string?> refResolver,
+        bool applyDecodeParms)
+    {
         var width = MatchInt(dictText, "Width");
         var height = MatchInt(dictText, "Height");
         if (width is null || height is null || width <= 0 || height <= 0)
@@ -734,10 +752,18 @@ internal static class ScanDownsampleService
             return null;
         }
 
-        var predictor = MatchInt(DecodeParmsText(dictText, refResolver), "Predictor") ?? 1;
-        if (predictor is not (1 or 2))
+        int predictor;
+        if (applyDecodeParms)
         {
-            return null; // PNG predictors 10-15 deferred
+            predictor = MatchInt(DecodeParmsText(dictText, refResolver), "Predictor") ?? 1;
+            if (predictor is not (1 or 2))
+            {
+                return null; // PNG predictors 10-15 deferred
+            }
+        }
+        else
+        {
+            predictor = 1; // filterless data is already raw: stale parms must not shift pixels
         }
 
         if (!TryDescribePixels(dictText, refResolver, width.Value, out var components, out var indexBpc, out var palette, out var gray))

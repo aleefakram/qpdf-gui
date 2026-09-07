@@ -53,7 +53,10 @@ public static class Program
             ("Downsample maps gray indexed palette", DownsampleMapsGrayIndexed),
             ("Downsample reverses predictor before indexed map", DownsampleReversesPredictorBeforeIndexedMap),
             ("Downsample skips unsupported indexed forms", DownsampleSkipsBadIndexed),
+            ("Downsample interprets raw samples without filter", DownsampleInterpretsRawSamples),
+            ("Downsample ignores stale DecodeParms on raw streams", DownsampleIgnoresStaleDecodeParms),
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
+            ("Downsample end-to-end shrinks a Flate scan", DownsampleEndToEndShrinksFlateScan),
             ("Compress forwards staged input and surfaces note", CompressForwardsStagedInputAndSurfacesNote),
             ("Compress forwards Original resolution to staged run", CompressForwardsOriginalResolution),
             ("Downsample resolves indirect Resources maps", DownsampleResolvesIndirectResources),
@@ -745,6 +748,40 @@ public static class Program
         return Task.CompletedTask;
     }
 
+    private static Task DownsampleInterpretsRawSamples()
+    {
+        // 8x4 RGB raw pixels, no /Filter: exactly what generalized decoding leaves.
+        const int width = 8;
+        const int height = 4;
+        var pixels = new byte[width * height * 3];
+        for (var i = 0; i < pixels.Length; i++)
+        {
+            pixels[i] = (byte)(i * 7);
+        }
+
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 8 /Height 4 " +
+            "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 96 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeRawSamples(pixels, dict, _ => null);
+        Assert(decoded is not null, "raw samples must decode");
+        Assert(decoded.Pixels[0] == pixels[2] && decoded.Pixels[2] == pixels[0], "BGR swizzle missing");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleIgnoresStaleDecodeParms()
+    {
+        // Corruption guard: stale predictor on filterless data must NOT be applied.
+        // (Applying Predictor 2 here would silently shift every pixel.)
+        var pixels = new byte[] { 10, 20, 30, 40, 50, 60 };
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            "/ColorSpace /DeviceRGB /BitsPerComponent 8 " +
+            "/DecodeParms << /Predictor 2 /Columns 2 /Colors 3 >> /Length 6 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeRawSamples(pixels, dict, _ => null);
+        Assert(decoded is not null, "raw samples with stale parms must decode");
+        Assert(decoded.Pixels[0] == 30 && decoded.Pixels[3] == 60,
+            "stale predictor must be ignored, not applied");
+        return Task.CompletedTask;
+    }
+
     private static async Task DownsampleEndToEndShrinksScan()
     {
         var qpdf = FindRepoQpdf();
@@ -792,6 +829,64 @@ public static class Program
                 var linAfter = new FileInfo(linearized).Length;
                 Console.WriteLine($"SIZE-LIN {before} -> {linAfter} ({(double)linAfter / before:P0})");
                 Assert((double)linAfter / before < 0.6, $"linearized expected <60% of original, got {linAfter} of {before}");
+            }
+            finally
+            {
+                Operations.ScanDownsampleService.DeleteWorkspaceFor(result.QdfPath!);
+            }
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    private static async Task DownsampleEndToEndShrinksFlateScan()
+    {
+        var qpdf = FindRepoQpdf();
+        if (qpdf is null)
+        {
+            Console.WriteLine("SKIP qpdf.exe not found under repo Native/");
+            return;
+        }
+
+        var workspace = Path.Combine(Path.GetTempPath(), "pdf-ninja-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            const int width = 1800;
+            const int height = 2250;
+            var pixels = new byte[width * height * 3];
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x++)
+                {
+                    var i = (y * width + x) * 3;
+                    pixels[i] = (byte)(x * 255 / width);
+                    pixels[i + 1] = (byte)(y * 255 / height);
+                    pixels[i + 2] = 128;
+                }
+            }
+
+            var pdf = Path.Combine(workspace, "flate-scan.pdf");
+            WriteMinimalFlateImagePdf(pdf, pixels, width, height);
+
+            var result = await Operations.ScanDownsampleService.DownsampleAsync(
+                qpdf, pdf, 150, 75, null, CancellationToken.None);
+            Assert(result.Applied, "expected the Flate scan to be downsampled");
+            Assert(result.ImagesDownsampled == 1, $"expected 1 image, got {result.ImagesDownsampled}");
+            Assert(result.QdfPath is not null && File.Exists(result.QdfPath), "qdf missing");
+            try
+            {
+                var compressed = Path.Combine(workspace, "flate-compressed.pdf");
+                var outcome = await QpdfOperationService.RunAsync(
+                    new CompressRequest(qpdf, result.QdfPath!, false, compressed, 75),
+                    null, CancellationToken.None, true);
+                Assert(outcome.Succeeded, outcome.Details);
+                var before = new FileInfo(pdf).Length;
+                var after = new FileInfo(compressed).Length;
+                Console.WriteLine($"SIZE-FLATE {before} -> {after} ({(double)after / before:P0})");
+                Assert((double)after / before < 0.6, $"expected <60% of original, got {after} of {before}");
             }
             finally
             {
@@ -1325,6 +1420,61 @@ public static class Program
         Write($"5 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} " +
             $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {jpeg.Length} >>\nstream\n");
         file.Write(jpeg, 0, jpeg.Length);
+        Write("\nendstream\nendobj\n");
+        var xref = file.Position;
+        var count = objects.Length + 2;
+        Write($"xref\n0 {count}\n0000000000 65535 f \n");
+        foreach (var offset in offsets)
+        {
+            Write($"{offset:D10} 00000 n \n");
+        }
+
+        Write($"trailer\n<< /Size {count} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF");
+    }
+
+    private static void WriteMinimalFlateImagePdf(string path, byte[] pixelsBgr, int width, int height)
+    {
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(pixelsBgr, 0, pixelsBgr.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        var latin1 = System.Text.Encoding.Latin1;
+        const string content = "q 612 0 0 792 0 0 cm /Im1 Do Q";
+        var contentBytes = latin1.GetBytes(content);
+        var objects = new[]
+        {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R " +
+                "/Resources << /XObject << /Im1 5 0 R >> >> >>",
+            $"<< /Length {contentBytes.Length} >>\nstream\n{content}\nendstream",
+        };
+        using var file = File.Create(path);
+        void Write(string value)
+        {
+            var encoded = latin1.GetBytes(value);
+            file.Write(encoded, 0, encoded.Length);
+        }
+
+        Write("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        var offsets = new List<long>();
+        for (var i = 0; i < objects.Length; i++)
+        {
+            offsets.Add(file.Position);
+            Write($"{i + 1} 0 obj\n{objects[i]}\nendobj\n");
+        }
+
+        offsets.Add(file.Position);
+        Write($"5 0 obj\n<< /Type /XObject /Subtype /Image /Width {width} /Height {height} " +
+            $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {compressed.Length} >>\nstream\n");
+        file.Write(compressed, 0, compressed.Length);
         Write("\nendstream\nendobj\n");
         var xref = file.Position;
         var count = objects.Length + 2;
