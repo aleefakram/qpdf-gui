@@ -30,7 +30,8 @@ public partial class CompressPage : UserControl, IBusyPage
                 BusyStateChanged?.Invoke(this, EventArgs.Empty);
                 RefreshChrome();
             }
-            else if (eventArgs.PropertyName is nameof(CompressViewModel.Outcome) or nameof(CompressViewModel.StatusPercent))
+            else if (eventArgs.PropertyName is nameof(CompressViewModel.Outcome) or nameof(CompressViewModel.StatusPercent)
+                or nameof(CompressViewModel.IsDownsampling))
             {
                 RefreshChrome();
             }
@@ -50,7 +51,9 @@ public partial class CompressPage : UserControl, IBusyPage
         CancelButton.Visibility = viewModel.IsBusy ? Visibility.Visible : Visibility.Hidden;
         if (viewModel.IsBusy)
         {
-            Status.ShowRunning($"Compressing PDF… {viewModel.StatusPercent}%");
+            Status.ShowRunning(viewModel.IsDownsampling
+                ? "Downsampling scans…"
+                : $"Compressing PDF… {viewModel.StatusPercent}%");
             Status.Report(viewModel.StatusPercent);
             return;
         }
@@ -84,11 +87,12 @@ public partial class CompressPage : UserControl, IBusyPage
         var afterMb = outputBytes / BytesPerMegabyte;
         var sizes = $"{beforeMb:N1} MB \u2192 {afterMb:N1} MB";
         var savedPercent = 100.0 * (1 - outputBytes / (double)viewModel.InputBytes);
+        var note = viewModel.DownsampleNote.Length > 0 ? $" {viewModel.DownsampleNote}" : string.Empty;
 
         // Under 5% smaller: say so plainly instead of celebrating a no-op.
         return savedPercent < 5
-            ? $"{sizes}. This PDF was already well compressed \u2014 only {savedPercent:N0}% smaller."
-            : $"{saved} ({sizes}, {savedPercent:N0}% smaller)";
+            ? $"{sizes}. This PDF was already well compressed \u2014 only {savedPercent:N0}% smaller.{note}"
+            : $"{saved} ({sizes}, {savedPercent:N0}% smaller).{note}";
     }
 
     private void QualityPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -97,6 +101,15 @@ public partial class CompressPage : UserControl, IBusyPage
             int.TryParse(tag, out var quality))
         {
             viewModel.ImageQualityPercent = quality;
+        }
+    }
+
+    private void ResolutionPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ResolutionPicker.SelectedItem is ComboBoxItem { Tag: string tag } &&
+            int.TryParse(tag, out var dpi))
+        {
+            viewModel.MaxResolutionDpi = dpi;
         }
     }
 
