@@ -38,6 +38,8 @@ public static class Program
             ("Downsample targets flag oversized scans", DownsampleTargetsFlagOversized),
             ("Downsample targets skip content under the cap", DownsampleTargetsSkipWhenUnderCap),
             ("Downsample targets Flate images for re-encode", DownsampleTargetsFlateForReencode),
+            ("FindRawObject matches real QDF shape", FindRawObjectMatchesRealQdfShape),
+            ("Downsample resolves indirect palette", DownsampleResolvesIndirectPalette),
             ("Downsample rewrite dict updates dimensions", DownsampleRewriteDict),
             ("Downsample decodes Flate RGB image", DownsampleDecodesFlateRgb),
             ("Downsample decodes Flate gray image", DownsampleDecodesFlateGray),
@@ -316,11 +318,64 @@ public static class Program
             var splicedText = System.Text.Encoding.Latin1.GetString(spliced);
             Assert(splicedText.Contains("/Filter /DCTDecode") && splicedText.Contains("/Width 849"),
                 "spliced dict must be normalized JPEG dims");
+            var reparsed = Operations.ScanDownsampleService.ParseObjects(splicedText);
+            Assert(reparsed.TryGetValue(5, out var rewrittenImage), "rewritten image 5 must parse");
+            var rewrittenDict = splicedText.Substring(rewrittenImage.DictOffset, rewrittenImage.DictLength);
+            Assert(rewrittenDict.Contains("/Height 1062"), "rewritten height must be 1062");
+            Assert(rewrittenDict.Contains("/BitsPerComponent 8"), "rewritten BPC must be 8");
+            Assert(!rewrittenDict.Contains("/DecodeParms"), "DecodeParms must be stripped");
+            var lengthMatch = System.Text.RegularExpressions.Regex.Match(rewrittenDict, @"/Length\s+(\d+)");
+            Assert(lengthMatch.Success && int.Parse(lengthMatch.Groups[1].Value) == rewrittenImage.StreamLength,
+                "direct /Length must equal stream length");
+            Assert(spliced[rewrittenImage.StreamOffset] == 0xFF && spliced[rewrittenImage.StreamOffset + 1] == 0xD8,
+                "spliced stream must start with JPEG magic");
         }
         finally
         {
             Directory.Delete(workspace, recursive: true);
         }
+    }
+
+    private static Task FindRawObjectMatchesRealQdfShape()
+    {
+        const string single = "12 0 obj\n(ABC)\nendobj\n";
+        var found = Operations.ScanDownsampleService.FindRawObject(single, 12);
+        Assert(found is not null && found.Contains("(ABC)"), "real QDF shape must match");
+        const string two = "11 0 obj\n(X)\nendobj\n12 0 obj\n(ABC)\nendobj\n";
+        var second = Operations.ScanDownsampleService.FindRawObject(two, 12);
+        Assert(second is not null && second.Contains("ABC") && !second.Contains("(X)"),
+            "must return object 12, not object 11");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleResolvesIndirectPalette()
+    {
+        // 2x1, 8-bit indices 0 and 1 into a 2-entry RGB palette held in object 12.
+        byte[] indices = [0, 1];
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(indices, 0, indices.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        const string qdfText = "12 0 obj\n<FF000000FF00>\nendobj\n";
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            "/ColorSpace [/Indexed /DeviceRGB 1 12 0 R] " +
+            "/BitsPerComponent 8 /Filter /FlateDecode /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(
+            compressed, dict, n => Operations.ScanDownsampleService.FindRawObject(qdfText, n));
+        Assert(decoded is not null && !decoded.Gray, "indirect indexed RGB must decode");
+        Assert(decoded.Pixels.Length == 6, "wrong output length");
+        Assert(decoded.Pixels[0] == 0 && decoded.Pixels[1] == 0 && decoded.Pixels[2] == 255,
+            "index 0 must map to red, swizzled to BGR");
+        Assert(decoded.Pixels[3] == 0 && decoded.Pixels[4] == 255 && decoded.Pixels[5] == 0,
+            "index 1 must map to green");
+        return Task.CompletedTask;
     }
 
     private static Task DownsampleRewriteDict()

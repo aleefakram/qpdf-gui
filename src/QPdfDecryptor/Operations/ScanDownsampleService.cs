@@ -156,6 +156,18 @@ internal static class ScanDownsampleService
             return new DownsampleCounts(0, CountImageObjects(objects, text));
         }
 
+        var rawCache = new Dictionary<int, string?>();
+        string? ResolveRaw(int number)
+        {
+            if (!rawCache.TryGetValue(number, out var cached))
+            {
+                cached = FindRawObject(text, number);
+                rawCache[number] = cached;
+            }
+
+            return cached;
+        }
+
         var replacements = new List<ImageReplacement>(targets.Count);
         var done = 0;
         foreach (var (objectNumber, target) in targets)
@@ -166,7 +178,7 @@ internal static class ScanDownsampleService
             Buffer.BlockCopy(bytes, image.StreamOffset, streamBytes, 0, image.StreamLength);
             var dictText = text.Substring(image.DictOffset, image.DictLength);
             var replacement = TryReencode(streamBytes, dictText, target.Width, target.Height, jpegQuality,
-                number => FindRawObject(text, number));
+                ResolveRaw);
             if (replacement is not null)
             {
                 replacements.Add(new ImageReplacement(objectNumber, replacement.Bytes, target.Width, target.Height, replacement.Gray));
@@ -328,7 +340,7 @@ internal static class ScanDownsampleService
     // lookups are resolved this way.
     internal static string? FindRawObject(string text, int number)
     {
-        var match = Regex.Match(text, $@"(?<!\d){number}\s+\d+\s+obj\b(.*? )endobj", RegexOptions.Singleline);
+        var match = Regex.Match(text, $@"(?<!\d){number}\s+\d+\s+obj\b(.*?)\s+endobj", RegexOptions.Singleline);
         return match.Success ? match.Groups[1].Value : null;
     }
 
