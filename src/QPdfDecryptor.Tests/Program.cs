@@ -41,6 +41,7 @@ public static class Program
             ("Downsample decodes Flate RGB image", DownsampleDecodesFlateRgb),
             ("Downsample decodes Flate gray image", DownsampleDecodesFlateGray),
             ("Downsample rejects undecodable Flate", DownsampleRejectsBadFlate),
+            ("Downsample reverses TIFF predictor", DownsampleReversesTiffPredictor),
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
             ("Compress forwards staged input and surfaces note", CompressForwardsStagedInputAndSurfacesNote),
             ("Compress forwards Original resolution to staged run", CompressForwardsOriginalResolution),
@@ -346,6 +347,40 @@ public static class Program
 
         Assert(Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict.Replace("/DeviceRGB", "/DeviceCMYK"), _ => null) is null,
             "CMYK must be skipped");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleReversesTiffPredictor()
+    {
+        // 4x1 RGB, predictor-2 encoded: each byte after the first pixel is a delta.
+        byte[] plain = [10, 20, 30, 11, 21, 31, 12, 22, 32, 13, 23, 33];
+        var encoded = new byte[plain.Length];
+        Array.Copy(plain, encoded, plain.Length);
+        for (var i = 3; i < encoded.Length; i++)
+        {
+            encoded[i] = (byte)(plain[i] - plain[i - 3]);
+        }
+
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(encoded, 0, encoded.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 4 /Height 1 " +
+            "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode " +
+            "/DecodeParms << /Predictor 2 /Columns 4 >> /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null, "predictor-2 Flate must decode");
+        Assert(decoded.Pixels[0] == 30 && decoded.Pixels[1] == 20 && decoded.Pixels[2] == 10,
+            "first pixel wrong after reversal + BGR swizzle");
+        Assert(decoded.Pixels[11] == 13 && decoded.Pixels[10] == 23 && decoded.Pixels[9] == 33,
+            "last pixel wrong after reversal + BGR swizzle");
         return Task.CompletedTask;
     }
 

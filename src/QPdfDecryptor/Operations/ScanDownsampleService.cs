@@ -761,9 +761,28 @@ internal static class ScanDownsampleService
         return false;
     }
 
-    // Task 2 placeholder: only predictor 1 passes through yet
-    private static byte[]? ApplyPredictor(byte[] raw, int width, int height, int rowBytes, int components, int predictor) =>
-        predictor == 1 ? raw : null;
+    private static byte[]? ApplyPredictor(byte[] raw, int width, int height, int rowBytes, int components, int predictor)
+    {
+        if (predictor == 1)
+        {
+            return raw;
+        }
+
+        // TIFF predictor 2: each byte (past the first pixel of each row) is stored
+        // as a delta from the same component of the previous pixel.
+        var output = new byte[raw.Length];
+        for (var row = 0; row < height; row++)
+        {
+            var offset = row * rowBytes;
+            for (var i = 0; i < rowBytes; i++)
+            {
+                var prior = i >= components ? output[offset + i - components] : 0;
+                output[offset + i] = (byte)(raw[offset + i] + prior);
+            }
+        }
+
+        return output;
+    }
 
     private static DecodedFlate? ApplyPalette(byte[] samples, int width, int height, int indexBpc, byte[] palette, bool gray) =>
         null; // Task 3: indexed palette expansion (deferred)
