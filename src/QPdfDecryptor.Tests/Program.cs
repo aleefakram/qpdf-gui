@@ -37,6 +37,7 @@ public static class Program
             ("Downsample image dict filter skips masks", DownsampleImageDictFilter),
             ("Downsample targets flag oversized scans", DownsampleTargetsFlagOversized),
             ("Downsample targets skip content under the cap", DownsampleTargetsSkipWhenUnderCap),
+            ("Downsample keeps largest scale across draws", DownsampleKeepsLargestScaleAcrossDraws),
             ("Downsample targets Flate images for re-encode", DownsampleTargetsFlateForReencode),
             ("FindRawObject matches real QDF shape", FindRawObjectMatchesRealQdfShape),
             ("Downsample resolves indirect palette", DownsampleResolvesIndirectPalette),
@@ -249,6 +250,28 @@ public static class Program
         Assert(targets.Count == 1 && targets.ContainsKey(5), "image 5 must be targeted at 100 DPI cap");
         Assert(targets[5].Width == 849 && targets[5].Height == 1062,
             $"wrong target size: {targets[5].Width}x{targets[5].Height}");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleKeepsLargestScaleAcrossDraws()
+    {
+        // One image drawn full-page AND as a thumbnail: the thumbnail's tiny
+        // scale must not destroy the full-page rendering (1416 DPI -> 84x105).
+        var draws = "q 612 0 0 792 0 0 cm /Im1 Do Q q 61 0 0 79 500 700 cm /Im1 Do Q";
+        var qdf =
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R " +
+            "/Resources << /XObject << /Im1 5 0 R >> >> >>\nendobj\n" +
+            $"4 0 obj\n<< /Length {draws.Length} >>\nstream\n{draws}\nendstream\nendobj\n" +
+            "5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 /ColorSpace /DeviceRGB " +
+            "/BitsPerComponent 8 /Filter /DCTDecode /Length 6 0 R >>\nstream\nÿØAAAA\nendstream\nendobj\n" +
+            "6 0 obj\n4\nendobj\n";
+        var objects = Operations.ScanDownsampleService.ParseObjects(qdf);
+        var targets = Operations.ScanDownsampleService.FindDownsampleTargets(objects, qdf, 100);
+        Assert(targets.Count == 1 && targets.ContainsKey(5), "image 5 must be targeted");
+        Assert(targets[5].Width == 849 && targets[5].Height == 1062,
+            $"shared image must keep full-page dims, got {targets[5].Width}x{targets[5].Height}");
         return Task.CompletedTask;
     }
 

@@ -506,8 +506,10 @@ internal static class ScanDownsampleService
                         continue;
                     }
 
+                    // Shared image across draws: keep the LARGEST required target so a
+                    // thumbnail use can never destroy the full-page rendering.
                     if (!targets.TryGetValue(imageNumber, out var existing) ||
-                        targetWidth * (long)targetHeight < existing.Width * (long)existing.Height)
+                        targetWidth * (long)targetHeight > existing.Width * (long)existing.Height)
                     {
                         targets[imageNumber] = new TargetSize(targetWidth, targetHeight);
                     }
