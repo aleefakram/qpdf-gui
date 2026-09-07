@@ -862,9 +862,9 @@ public static class Program
                 for (var x = 0; x < width; x++)
                 {
                     var i = (y * width + x) * 3;
-                    pixels[i] = (byte)(x * 255 / width);
-                    pixels[i + 1] = (byte)(y * 255 / height);
-                    pixels[i + 2] = 128;
+                    pixels[i] = (byte)((x * 131 + y * 197 + ((x * y) % 251)) % 256);
+                    pixels[i + 1] = (byte)((x * 179 + y * 97 + ((x * y) % 241)) % 256);
+                    pixels[i + 2] = (byte)((x * 211 + y * 151 + ((x * y) % 233)) % 256);
                 }
             }
 
