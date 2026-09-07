@@ -44,6 +44,11 @@ public static class Program
             ("Downsample reverses TIFF predictor", DownsampleReversesTiffPredictor),
             ("Downsample reverses TIFF predictor across rows", DownsampleReversesTiffPredictorMultiRow),
             ("Downsample maps indexed palette to RGB", DownsampleMapsIndexedPalette),
+            ("Downsample aligns sub-byte indexed rows", DownsampleAlignsSubByteIndexedRows),
+            ("Downsample maps 4-bit indexed nibbles", DownsampleMaps4BitIndexed),
+            ("Downsample maps hex indexed palette", DownsampleMapsHexIndexedPalette),
+            ("Downsample maps gray indexed palette", DownsampleMapsGrayIndexed),
+            ("Downsample reverses predictor before indexed map", DownsampleReversesPredictorBeforeIndexedMap),
             ("Downsample skips unsupported indexed forms", DownsampleSkipsBadIndexed),
             ("Downsample end-to-end shrinks a scan PDF", DownsampleEndToEndShrinksScan),
             ("Compress forwards staged input and surfaces note", CompressForwardsStagedInputAndSurfacesNote),
@@ -453,6 +458,149 @@ public static class Program
             "index 0 must map to red, swizzled to BGR");
         Assert(decoded.Pixels[3] == 255 && decoded.Pixels[4] == 0 && decoded.Pixels[5] == 0,
             "index 2 must map to blue, swizzled to BGR");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleAlignsSubByteIndexedRows()
+    {
+        // 3x2, 1-bit: width not byte-aligned, each row padded to a full byte.
+        // Row 0 bits 1,0,1; row 1 bits 0,1,1 (low 5 bits of each row are pad).
+        byte[] samples = [0xA0, 0x60];
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(samples, 0, samples.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        // Palette: entry0 = black, entry1 = white.
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 3 /Height 2 " +
+            "/ColorSpace [/Indexed /DeviceRGB 1 (\\000\\000\\000\\377\\377\\377)] " +
+            "/BitsPerComponent 1 /Filter /FlateDecode /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null && !decoded.Gray, "1-bit indexed must decode");
+        Assert(decoded.Pixels.Length == 18, "wrong output length");
+        Assert(decoded.Pixels[0] == 255 && decoded.Pixels[3] == 0 && decoded.Pixels[6] == 255,
+            "row 0 must decode to white, black, white");
+        Assert(decoded.Pixels[9] == 0 && decoded.Pixels[12] == 255 && decoded.Pixels[15] == 255,
+            "row 1 must restart at its own byte (black, white, white)");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleMaps4BitIndexed()
+    {
+        // Single row of two 4-bit indices: high nibble A, low nibble B.
+        byte[] samples = [0xAB];
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(samples, 0, samples.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        // 12-entry palette: entries 0-9 black, entry 10 red, entry 11 blue.
+        var paletteHex = new string('0', 60) + "FF0000" + "0000FF";
+        var dict = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            $"/ColorSpace [/Indexed /DeviceRGB 11 <{paletteHex}>] " +
+            "/BitsPerComponent 4 /Filter /FlateDecode /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null && !decoded.Gray, "4-bit indexed must decode");
+        Assert(decoded.Pixels.Length == 6, "wrong output length");
+        Assert(decoded.Pixels[0] == 0 && decoded.Pixels[1] == 0 && decoded.Pixels[2] == 255,
+            "nibble A must map to red, swizzled to BGR");
+        Assert(decoded.Pixels[3] == 255 && decoded.Pixels[4] == 0 && decoded.Pixels[5] == 0,
+            "nibble B must map to blue, swizzled to BGR");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleMapsHexIndexedPalette()
+    {
+        // Same 2x1 content as the literal-palette test, hex lookup form.
+        byte[] indices = [0, 2];
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(indices, 0, indices.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            "/ColorSpace [/Indexed /DeviceRGB 2 <FF000000FF000000FF>] " +
+            "/BitsPerComponent 8 /Filter /FlateDecode /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null && !decoded.Gray, "hex indexed RGB must decode");
+        Assert(decoded.Pixels.Length == 6, "wrong output length");
+        Assert(decoded.Pixels[0] == 0 && decoded.Pixels[1] == 0 && decoded.Pixels[2] == 255,
+            "index 0 must map to red, swizzled to BGR");
+        Assert(decoded.Pixels[3] == 255 && decoded.Pixels[4] == 0 && decoded.Pixels[5] == 0,
+            "index 2 must map to blue, swizzled to BGR");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleMapsGrayIndexed()
+    {
+        byte[] indices = [0, 1];
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(indices, 0, indices.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 " +
+            "/ColorSpace [/Indexed /DeviceGray 1 <10E0>] " +
+            "/BitsPerComponent 8 /Filter /FlateDecode /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null && decoded.Gray, "indexed gray must decode");
+        Assert(decoded.Pixels.Length == 2, "wrong output length");
+        Assert(decoded.Pixels[0] == 0x10 && decoded.Pixels[1] == 0xE0, "gray palette values wrong");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleReversesPredictorBeforeIndexedMap()
+    {
+        // 4x1 8-bit indices [0,1,1,2] stored as predictor-2 deltas [0,1,0,1].
+        byte[] encoded = [0, 1, 0, 1];
+        byte[] compressed;
+        using (var output = new MemoryStream())
+        {
+            using (var zlib = new System.IO.Compression.ZLibStream(output, System.IO.Compression.CompressionMode.Compress))
+            {
+                zlib.Write(encoded, 0, encoded.Length);
+            }
+
+            compressed = output.ToArray();
+        }
+
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 4 /Height 1 " +
+            "/ColorSpace [/Indexed /DeviceRGB 2 (\\377\\000\\000\\000\\377\\000\\000\\000\\377)] " +
+            "/BitsPerComponent 8 /Filter /FlateDecode " +
+            "/DecodeParms << /Predictor 2 /Columns 4 >> /Length 0 >>";
+        var decoded = Operations.ScanDownsampleService.DecodeFlateImage(compressed, dict, _ => null);
+        Assert(decoded is not null && !decoded.Gray, "predictor indexed must decode");
+        Assert(decoded.Pixels.Length == 12, "wrong output length");
+        Assert(decoded.Pixels[0] == 0 && decoded.Pixels[1] == 0 && decoded.Pixels[2] == 255,
+            "index 0 must map to red, swizzled to BGR");
+        Assert(decoded.Pixels[3] == 0 && decoded.Pixels[4] == 255 && decoded.Pixels[5] == 0,
+            "delta-decoded index 1 must map to green");
+        Assert(decoded.Pixels[9] == 255 && decoded.Pixels[10] == 0 && decoded.Pixels[11] == 0,
+            "delta-decoded index 2 must map to blue, swizzled to BGR");
         return Task.CompletedTask;
     }
 

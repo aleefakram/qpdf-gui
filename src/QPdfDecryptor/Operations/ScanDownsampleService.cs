@@ -717,7 +717,7 @@ internal static class ScanDownsampleService
 
         if (indexBpc > 0)
         {
-            return ApplyPalette(samples, width.Value, height.Value, indexBpc, palette!, gray);
+            return ApplyPalette(samples, width.Value, height.Value, rowBytes, indexBpc, palette!, gray);
         }
 
         if (gray)
@@ -748,7 +748,7 @@ internal static class ScanDownsampleService
             }
 
             gray = baseName == "/DeviceGray";
-            if (!int.TryParse(indexed.Groups[2].Value, out var hival) || hival < 0)
+            if (!int.TryParse(indexed.Groups[2].Value, out var hival) || hival is < 0 or > 255)
             {
                 return false;
             }
@@ -763,44 +763,14 @@ internal static class ScanDownsampleService
             byte[]? paletteBytes = null;
             if (rest.StartsWith("(", StringComparison.Ordinal))
             {
-                var depth = 0;
-                var end = -1;
-                for (var i = 0; i < rest.Length; i++)
-                {
-                    var c = rest[i];
-                    if (c == '\\')
-                    {
-                        i++;
-                        if (i < rest.Length && rest[i] == '\r' && i + 1 < rest.Length && rest[i + 1] == '\n')
-                        {
-                            i++;
-                        }
-
-                        continue;
-                    }
-
-                    if (c == '(')
-                    {
-                        depth++;
-                    }
-                    else if (c == ')')
-                    {
-                        depth--;
-                        if (depth == 0)
-                        {
-                            end = i;
-                            break;
-                        }
-                    }
-                }
-
-                if (end < 0)
+                if (!TryExtractBalancedLiteral(rest, 0, out var end))
                 {
                     return false;
                 }
 
                 paletteBytes = DecodeLiteralString(rest.Substring(0, end + 1));
             }
+            // NOTE: hex tails intentionally duplicated (direct vs indirect scans differ just enough to not share).
             else if (rest.StartsWith("<", StringComparison.Ordinal))
             {
                 if (rest.StartsWith("<<", StringComparison.Ordinal))
@@ -824,6 +794,7 @@ internal static class ScanDownsampleService
                     return false;
                 }
 
+                // NOTE: resolved against raw object text, not the parsed table (bare string objects have no dict)
                 var resolved = refResolver(refNumber);
                 if (resolved is null)
                 {
@@ -849,38 +820,7 @@ internal static class ScanDownsampleService
 
                 if (literalIndex >= 0 && (hexIndex < 0 || literalIndex < hexIndex))
                 {
-                    var depth = 0;
-                    var end = -1;
-                    for (var i = literalIndex; i < resolved.Length; i++)
-                    {
-                        var c = resolved[i];
-                        if (c == '\\')
-                        {
-                            i++;
-                            if (i < resolved.Length && resolved[i] == '\r' && i + 1 < resolved.Length && resolved[i + 1] == '\n')
-                            {
-                                i++;
-                            }
-
-                            continue;
-                        }
-
-                        if (c == '(')
-                        {
-                            depth++;
-                        }
-                        else if (c == ')')
-                        {
-                            depth--;
-                            if (depth == 0)
-                            {
-                                end = i;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (end < 0)
+                    if (!TryExtractBalancedLiteral(resolved, literalIndex, out var end))
                     {
                         return false;
                     }
@@ -964,41 +904,87 @@ internal static class ScanDownsampleService
         return output;
     }
 
-    private static DecodedFlate? ApplyPalette(byte[] samples, int width, int height, int indexBpc, byte[] palette, bool gray)
+    private static DecodedFlate? ApplyPalette(byte[] samples, int width, int height, int rowBytes, int indexBpc, byte[] palette, bool gray)
     {
         var channels = gray ? 1 : 3;
+        var pixelBytes = (long)width * height * channels;
+        if (pixelBytes > MaxDecompressedBytes)
+        {
+            return null;
+        }
+
         var pixels = new byte[width * height * channels];
         var entries = palette.Length / channels;
-        var bitPosition = 0;
-        for (var i = 0; i < width * height; i++)
+        for (var row = 0; row < height; row++)
         {
-            var index = 0;
-            for (var b = 0; b < indexBpc; b++)
+            var bitPosition = row * rowBytes * 8;
+            for (var col = 0; col < width; col++)
             {
-                var byteIndex = bitPosition / 8;
-                var bit = 7 - (bitPosition % 8);
-                index = (index << 1) | ((samples[byteIndex] >> bit) & 1);
-                bitPosition++;
-            }
+                var index = 0;
+                for (var b = 0; b < indexBpc; b++)
+                {
+                    var byteIndex = bitPosition / 8;
+                    var bit = 7 - (bitPosition % 8);
+                    index = (index << 1) | ((samples[byteIndex] >> bit) & 1);
+                    bitPosition++;
+                }
 
-            if (index >= entries)
-            {
-                return null;
-            }
+                if (index >= entries)
+                {
+                    return null;
+                }
 
-            if (gray)
-            {
-                pixels[i] = palette[index];
-            }
-            else
-            {
-                pixels[i * 3] = palette[index * 3 + 2];
-                pixels[i * 3 + 1] = palette[index * 3 + 1];
-                pixels[i * 3 + 2] = palette[index * 3];
+                var i = row * width + col;
+                if (gray)
+                {
+                    pixels[i] = palette[index];
+                }
+                else
+                {
+                    pixels[i * 3] = palette[index * 3 + 2];
+                    pixels[i * 3 + 1] = palette[index * 3 + 1];
+                    pixels[i * 3 + 2] = palette[index * 3];
+                }
             }
         }
 
         return new DecodedFlate(pixels, width, height, gray);
+    }
+
+    private static bool TryExtractBalancedLiteral(string text, int openParenIndex, out int closeIndex)
+    {
+        closeIndex = -1;
+        var depth = 0;
+        for (var i = openParenIndex; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '\\')
+            {
+                i++;
+                if (i < text.Length && text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+                {
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (c == '(')
+            {
+                depth++;
+            }
+            else if (c == ')')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    closeIndex = i;
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static byte[] DecodeLiteralString(string token)
