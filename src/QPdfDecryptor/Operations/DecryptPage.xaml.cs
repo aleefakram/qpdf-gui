@@ -499,10 +499,18 @@ public partial class DecryptPage : UserControl, IBusyPage
         }
     }
 
-    private static string CsvField(string value) =>
-        value.Contains(',') || value.Contains('"') || value.Contains('\n')
+    internal static string CsvField(string value)
+    {
+        // A leading =, +, -, @ makes Excel evaluate the cell (file names are attacker-controlled).
+        if (value.Length > 0 && value[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+        {
+            value = "'" + value;
+        }
+
+        return value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r')
             ? $"\"{value.Replace("\"", "\"\"")}\""
             : value;
+    }
 
     private void ScanFolder()
     {
@@ -854,10 +862,9 @@ public partial class DecryptPage : UserControl, IBusyPage
 
     private static string? FindQpdfExecutable()
     {
-        var environmentPath = Environment.GetEnvironmentVariable("QPDF_EXECUTABLE");
+        // Bundled copies only: passwords are piped to this executable, so no environment override.
         var candidates = new[]
         {
-            environmentPath,
             Path.Combine(AppContext.BaseDirectory, "qpdf.exe"),
             Path.Combine(AppContext.BaseDirectory, "Native", "qpdf.exe")
         };

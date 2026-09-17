@@ -73,7 +73,7 @@ public static partial class QpdfOperationService
                 throw new OperationCanceledException(cancellationToken);
             }
 
-            return new OperationOutcome(false, false, null, "The PDF could not be processed.", exception.Message);
+            return new OperationOutcome(false, false, null, FriendlyError(exception.Message), exception.Message);
         }
         finally
         {

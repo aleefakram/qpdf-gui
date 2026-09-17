@@ -17,6 +17,14 @@ public sealed class BulkDecryptService
         for (var index = 0; index < request.InputPaths.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (IsInsideNestedOutput(request, request.InputPaths[index]))
+            {
+                results.Add(new FileResult(
+                    request.InputPaths[index], null, FileOutcome.Skipped, null,
+                    "This file is in the output folder from an earlier run, so it was skipped.", string.Empty));
+                continue;
+            }
+
             results.Add(await DecryptOneAsync(
                 request,
                 request.InputPaths[index],
@@ -162,7 +170,16 @@ public sealed class BulkDecryptService
                 string.Empty);
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new FileResult(
+                inputPath, null, FileOutcome.Failed, null,
+                "The output folder for this file could not be created.", exception.Message);
+        }
 
         var decryptProgress = progress is null
             ? null
@@ -245,6 +262,20 @@ public sealed class BulkDecryptService
         }
 
         return fullInput[(fullRoot.Length + 1)..];
+    }
+
+    // A recursive scan of the input folder also finds an output folder nested inside it;
+    // decrypting those files again would nest results ever deeper. Output == input root stays allowed.
+    private static bool IsInsideNestedOutput(BulkDecryptRequest request, string inputPath)
+    {
+        if (string.IsNullOrWhiteSpace(request.InputRoot) || PathsEqual(request.OutputDirectory, request.InputRoot))
+        {
+            return false;
+        }
+
+        var outputPrefix = Path.GetFullPath(request.OutputDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(inputPath).StartsWith(outputPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool PathsEqual(string left, string right) =>

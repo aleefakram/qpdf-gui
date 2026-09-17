@@ -68,8 +68,10 @@ public static class PageRangeParser
 
     private static int? ResolveBound(string bound, int pageCount) => bound switch
     {
+        // Plain digits only: qpdf rejects signs. "Z" is normalized to "z" when arguments are built.
         "z" or "Z" => pageCount,
-        _ when int.TryParse(bound, out var number) && number >= 1 && number <= pageCount => number,
+        _ when int.TryParse(bound, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number)
+               && number >= 1 && number <= pageCount => number,
         _ => null,
     };
 }

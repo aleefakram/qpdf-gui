@@ -36,6 +36,19 @@ internal sealed class StagedCompressRunner
         IProgress<bool>? isDownsampling,
         CancellationToken cancellationToken)
     {
+        // Validate against the ORIGINAL input: after the pre-pass the main run only sees the temp
+        // file, so its own "output differs from input" check could no longer protect the original.
+        try
+        {
+            new CompressRequest(input.QpdfPath, input.InputPath, input.LinearizeForWeb,
+                input.OutputPath, input.JpegQuality).Validate();
+        }
+        catch (ArgumentException exception)
+        {
+            return new StagedCompressResult(
+                new OperationOutcome(false, false, null, exception.Message, exception.Message), string.Empty);
+        }
+
         string? downsampled = null;
         string note = string.Empty;
         try

@@ -38,6 +38,9 @@ internal static class ScanDownsampleService
     private static readonly Regex DecodeParmsPattern = new(@"/DecodeParms\s*(\[[^\]]*\]|<<.*?>>)",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
+    private static readonly Regex XrefEntryPattern = new(@"(\d{10}) (\d{5}) n", RegexOptions.Compiled);
+    private static readonly Regex StartXrefPattern = new(@"startxref\s+(\d+)", RegexOptions.Compiled);
+
     private const int MinPixelsToConsider = 400; // decorations and thumbnails stay untouched
     private const int MinTargetPixels = 8;
 
@@ -90,7 +93,8 @@ internal static class ScanDownsampleService
             checkStart.ArgumentList.Add("--check");
             checkStart.ArgumentList.Add(qdfPath);
             var check = await QpdfProcessRunner.RunAsync(checkStart, null, null, cancellationToken);
-            if (check.ExitCode is not (0 or 3))
+            // The QDF pass already required a clean read, so any warning here means the splice broke something.
+            if (check.ExitCode != 0)
             {
                 // Splice produced something qpdf rejects: abandon quietly, the normal
                 // compress pass still runs on the original input.
@@ -421,16 +425,21 @@ internal static class ScanDownsampleService
         // Handles both single-line and split-across-lines "a b c d e f cm /Name Do".
         foreach (Match match in DrawPattern.Matches(content))
         {
-            draws.Add(new ImageDraw(
-                double.Parse(match.Groups[1].Value),
-                double.Parse(match.Groups[2].Value),
-                double.Parse(match.Groups[3].Value),
-                double.Parse(match.Groups[4].Value),
-                match.Groups[7].Value));
+            // PDF numbers are culture-invariant; a comma-decimal Windows locale must not change them.
+            if (!TryParsePdfNumber(match.Groups[1].Value, out var a) || !TryParsePdfNumber(match.Groups[2].Value, out var b) ||
+                !TryParsePdfNumber(match.Groups[3].Value, out var c) || !TryParsePdfNumber(match.Groups[4].Value, out var d))
+            {
+                continue;
+            }
+
+            draws.Add(new ImageDraw(a, b, c, d, match.Groups[7].Value));
         }
 
         return draws;
     }
+
+    private static bool TryParsePdfNumber(string text, out double value) =>
+        double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
 
     internal static double EffectiveDpi(int pixels, double drawnPoints) =>
         drawnPoints > 0 ? pixels * 72.0 / drawnPoints : 0;
@@ -1187,6 +1196,7 @@ internal static class ScanDownsampleService
     {
         using var spliced = new MemoryStream(bytes.Length);
         var cursor = 0;
+        var shifts = new List<(int Offset, int Delta)>(replacements.Count);
         foreach (var replacement in replacements.OrderBy(r => objects[r.ObjectNumber].DictOffset))
         {
             var image = objects[replacement.ObjectNumber];
@@ -1197,18 +1207,32 @@ internal static class ScanDownsampleService
             var newDictBytes = Latin1.GetBytes(newDict);
             spliced.Write(newDictBytes, 0, newDictBytes.Length);
             // Preserve the original ">> ... stream<EOL>" span verbatim ...
-            spliced.Write(bytes, image.DictOffset + image.DictLength, image.StreamOffset - (image.DictOffset + image.DictLength));
-            // ... but normalize the trailing EOL so Length stays exact.
+            var middleLength = image.StreamOffset - (image.DictOffset + image.DictLength);
+            spliced.Write(bytes, image.DictOffset + image.DictLength, middleLength);
+            // ... then the new data plus one LF; the original "endstream" keyword follows untouched.
             spliced.Write(replacement.JpegBytes, 0, replacement.JpegBytes.Length);
-            var tail = Latin1.GetBytes("\nendstream");
-            spliced.Write(tail, 0, tail.Length);
-            cursor = image.StreamOffset + image.StreamLength;
-            // Skip the original EOL before endstream.
-            var skipped = SkipOriginalTail(text, cursor);
-            cursor = skipped;
+            spliced.WriteByte((byte)'\n');
+            var spanEnd = SkipOriginalTail(text, image.StreamOffset + image.StreamLength);
+            var newLength = newDictBytes.Length + middleLength + replacement.JpegBytes.Length + 1;
+            shifts.Add((image.DictOffset, newLength - (spanEnd - image.DictOffset)));
+            cursor = spanEnd;
         }
 
-        spliced.Write(bytes, cursor, bytes.Length - cursor);
+        // Objects after a replacement moved; rewrite the xref table so qpdf reads the file without recovery.
+        var xrefStart = text.LastIndexOf("\nxref\n", StringComparison.Ordinal);
+        if (xrefStart < cursor)
+        {
+            spliced.Write(bytes, cursor, bytes.Length - cursor);
+            return spliced.ToArray();
+        }
+
+        spliced.Write(bytes, cursor, xrefStart - cursor);
+        long Shift(long offset) => offset + shifts.Where(s => s.Offset < offset).Sum(s => (long)s.Delta);
+        var xref = XrefEntryPattern.Replace(text[xrefStart..],
+            m => $"{Shift(long.Parse(m.Groups[1].Value)):D10} {m.Groups[2].Value} n");
+        xref = StartXrefPattern.Replace(xref, m => $"startxref\n{Shift(long.Parse(m.Groups[1].Value))}");
+        var xrefBytes = Latin1.GetBytes(xref);
+        spliced.Write(xrefBytes, 0, xrefBytes.Length);
         return spliced.ToArray();
     }
 
@@ -1235,7 +1259,10 @@ internal static class ScanDownsampleService
         var rewritten = Regex.Replace(dictText, @"/Width\s+\d+", $"/Width {replacement.Width}");
         rewritten = Regex.Replace(rewritten, @"/Height\s+\d+", $"/Height {replacement.Height}");
         rewritten = LengthPattern.Replace(rewritten, $"/Length {replacement.JpegBytes.Length}");
-        rewritten = FilterPattern.Replace(rewritten, "/Filter /DCTDecode");
+        // Generalized decoding leaves Flate images filterless; the JPEG bytes still need a filter.
+        rewritten = FilterPattern.IsMatch(rewritten)
+            ? FilterPattern.Replace(rewritten, "/Filter /DCTDecode")
+            : rewritten.Insert(rewritten.IndexOf("<<", StringComparison.Ordinal) + 2, " /Filter /DCTDecode");
         var colorSpace = replacement.Gray ? "/DeviceGray" : "/DeviceRGB";
         rewritten = ColorSpacePattern.Replace(rewritten, $"/ColorSpace {colorSpace}");
         rewritten = Regex.Replace(rewritten, @"/BitsPerComponent\s+\d+", "/BitsPerComponent 8");

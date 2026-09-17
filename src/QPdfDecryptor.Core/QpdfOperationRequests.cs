@@ -114,7 +114,7 @@ public sealed record RotateRequest(
             : RelativeAngleDegrees.ToString();
         if (!string.IsNullOrWhiteSpace(PageRange))
         {
-            rotation += $":{PageRange}";
+            rotation += $":{PageRange.Replace(" ", string.Empty).Replace('Z', 'z')}"; // qpdf's grammar
         }
 
         return ["--rotate=" + rotation, InputPath, temporaryOutputPath];
@@ -152,7 +152,7 @@ public sealed record OrganizeRequest(
         InputPath,
         "--pages",
         ".",
-        PageRanges.Replace(" ", string.Empty),
+        PageRanges.Replace(" ", string.Empty).Replace('Z', 'z'), // qpdf's grammar
         "--",
         temporaryOutputPath,
     ];

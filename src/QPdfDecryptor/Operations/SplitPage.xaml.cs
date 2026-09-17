@@ -130,7 +130,9 @@ public partial class SplitPage : UserControl, IBusyPage
         {
             var first = (part - 1) * perFile + 1;
             var last = Math.Min(part * perFile, count);
-            samples.Add($"{stem}-{first}-{last}.pdf");
+            // qpdf zero-pads page numbers to the digit count of the page total.
+            var digits = count.ToString().Length;
+            samples.Add($"{stem}-{first.ToString().PadLeft(digits, '0')}-{last.ToString().PadLeft(digits, '0')}.pdf");
         }
 
         EstimateHint.Text = files == 1

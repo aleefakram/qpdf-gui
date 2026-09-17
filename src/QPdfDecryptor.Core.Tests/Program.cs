@@ -90,6 +90,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Existing output is skipped when policy is Skip", ExistingOutputIsSkipped),
     ("Cancelling keeps finished outputs and leaves no temporary files", BulkCancellationKeepsFinishedOutputs),
     ("Recursive inputs preserve relative subpaths", RecursiveInputsPreserveRelativeSubpaths),
+    ("Uncreatable output subfolder fails one file, not the batch", UncreatableOutputSubfolderFailsOneFile),
+    ("Inputs inside a nested output folder are skipped", InputsInsideOutputFolderAreSkipped),
     ("Page range parses simple lists", ParsesSimpleList),
     ("Page range resolves z and reversed ranges", ResolvesZAndReversed),
     ("Page range rejects garbage and out-of-bounds", RejectsGarbageAndOutOfBounds),
@@ -111,6 +113,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Encrypted input is refused with a decrypt-first message", EncryptedRefused),
     ("Validation failure becomes a failed outcome, not an exception", ValidationFailureBecomesOutcome),
     ("Split collision refusal maps to an actionable message", SplitRefusalMessage),
+    ("Executor surfaces split collision as the actionable message", ExecutorSurfacesSplitCollisionMessage),
     ("Executor forwards write progress percentages", ExecutorForwardsWriteProgressPercentages)
 };
 
@@ -934,7 +937,7 @@ static Task ResolvesZAndReversed()
 
 static Task RejectsGarbageAndOutOfBounds()
 {
-    foreach (var text in new[] { "", "  ", "0", "-2", "4", "1-", "a", "1--3", "1,,2", "1-,3" })
+    foreach (var text in new[] { "", "  ", "0", "-2", "4", "1-", "a", "1--3", "1,,2", "1-,3", "+2", "1-+3" })
         if (PageRangeParser.Parse(text, 3) != null)
             throw new Exception($"'{text}' should be invalid");
     if (PageRangeParser.Parse("1", 0) != null)
@@ -995,6 +998,8 @@ static Task RotateBuildsArguments()
     AssertArgs(right.BuildArguments("t"), "--rotate=+90", "in.pdf", "t");
     IQpdfFileOperation left = new RotateRequest("q.exe", "in.pdf", -90, "2-z", "o.pdf");
     AssertArgs(left.BuildArguments("t"), "--rotate=-90:2-z", "in.pdf", "t");
+    IQpdfFileOperation spaced = new RotateRequest("q.exe", "in.pdf", 180, "1, 3 - Z", "o.pdf");
+    AssertArgs(spaced.BuildArguments("t"), "--rotate=+180:1,3-z", "in.pdf", "t");
     return Task.CompletedTask;
 }
 
@@ -1246,6 +1251,91 @@ static async Task ValidationFailureBecomesOutcome()
     if (!outcome.FriendlyError.Contains("invalid", StringComparison.OrdinalIgnoreCase))
     {
         throw new Exception("unexpected message: " + outcome.FriendlyError);
+    }
+}
+
+static async Task UncreatableOutputSubfolderFailsOneFile()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllTextAsync(acceptFile, "correct");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+
+        var outputDirectory = Path.Combine(directory, "out");
+        Directory.CreateDirectory(outputDirectory);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "a"), "a file where the subfolder should go");
+        var root = Path.Combine(directory, "src");
+        Directory.CreateDirectory(Path.Combine(root, "a"));
+        var blocked = Path.Combine(root, "a", "same.pdf");
+        var fine = Path.Combine(root, "fine.pdf");
+        await File.WriteAllTextAsync(blocked, "input");
+        await File.WriteAllTextAsync(fine, "input");
+
+        var result = await new BulkDecryptService().DecryptAsync(new BulkDecryptRequest(
+            Environment.ProcessPath!, new[] { blocked, fine }, new[] { "correct" },
+            outputDirectory, ConflictPolicy.Overwrite, root));
+
+        Assert(result.Files[0].Outcome == FileOutcome.Failed, "The blocked file was not reported as failed.");
+        Assert(result.Files[1].Outcome == FileOutcome.Decrypted, "The batch did not continue past the blocked file.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task InputsInsideOutputFolderAreSkipped()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var acceptFile = Path.Combine(directory, "accepted.txt");
+        await File.WriteAllTextAsync(acceptFile, "correct");
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", acceptFile);
+
+        var outputDirectory = Path.Combine(directory, "decrypted");
+        Directory.CreateDirectory(outputDirectory);
+        var original = Path.Combine(directory, "report.pdf");
+        var previousOutput = Path.Combine(outputDirectory, "report.pdf");
+        await File.WriteAllTextAsync(original, "input");
+        await File.WriteAllTextAsync(previousOutput, "earlier result");
+
+        var result = await new BulkDecryptService().DecryptAsync(new BulkDecryptRequest(
+            Environment.ProcessPath!, new[] { original, previousOutput }, new[] { "correct" },
+            outputDirectory, ConflictPolicy.AutoRename, directory));
+
+        Assert(result.Files[1].Outcome == FileOutcome.Skipped, "A previous output was processed as an input.");
+        Assert(!Directory.Exists(Path.Combine(outputDirectory, "decrypted")), "Output was nested inside the output folder.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("FAKE_QPDF_ACCEPT_FILE", null);
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ExecutorSurfacesSplitCollisionMessage()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        await File.WriteAllTextAsync(input, "x");
+        await File.WriteAllTextAsync(Path.Combine(workspace, "base-3-4.pdf"), "existing");
+
+        var outcome = await QpdfOperationService.RunAsync(
+            new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")));
+
+        Assert(!outcome.Succeeded, "An existing split output was overwritten.");
+        Assert(outcome.FriendlyError.Contains("already exist", StringComparison.Ordinal),
+            "unexpected message: " + outcome.FriendlyError);
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
     }
 }
 

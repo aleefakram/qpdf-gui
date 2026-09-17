@@ -74,6 +74,9 @@ public static class Program
             ("Downsample falls back when --check fails", DownsampleFallsBackWhenCheckFails),
             ("Downsample deletes workspace when pre-pass cancelled", DownsampleDeletesWorkspaceWhenPrePassCancelled),
             ("Staged runner feeds original input after check fallback", StagedRunnerFeedsOriginalInputAfterCheckFallback),
+            ("Downsample parses draws under comma-decimal culture", DownsampleDrawsParseUnderCommaDecimalCulture),
+            ("Staged runner refuses output over the original input", StagedRunnerRefusesOutputOverOriginal),
+            ("CSV report neutralizes spreadsheet formulas", CsvFieldNeutralizesFormulas),
         };
 
         foreach (var test in tests)
@@ -413,6 +416,61 @@ public static class Program
         Assert(rewritten.Contains("/Width 600") && rewritten.Contains("/Height 750"), "dims not updated");
         Assert(rewritten.Contains("/Length 10"), "length not direct");
         Assert(rewritten.Contains("/Filter /DCTDecode"), "filter not normalized");
+
+        // qpdf's generalized decoding strips /Filter from Flate images; JPEG bytes need one added.
+        const string filterless = "<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 "
+            + "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 7 0 R >>";
+        var added = Operations.ScanDownsampleService.RewriteImageDict(filterless,
+            new Operations.ScanDownsampleService.ImageReplacement(5, new byte[10], 600, 750, false));
+        Assert(added.Contains("/Filter /DCTDecode"), $"filter not added: {added}");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleDrawsParseUnderCommaDecimalCulture()
+    {
+        var original = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("fr-FR");
+            var draws = Operations.ScanDownsampleService.ParseContentDraws("595.2756 0 0 841.8898 0 0 cm /Im1 Do");
+            Assert(Math.Abs(draws[0].A - 595.2756) < 0.001, $"culture-dependent parse: {draws[0].A}");
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = original;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static async Task StagedRunnerRefusesOutputOverOriginal()
+    {
+        var downsampled = false;
+        var ran = false;
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+            {
+                ran = true;
+                return Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok"));
+            },
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+            {
+                downsampled = true;
+                return Task.FromResult(new Operations.DownsampleResult(true, "C:\\nowhere\\work.qdf", 1, 1));
+            });
+        var input = Path.Combine(Path.GetTempPath(), "scan.pdf");
+        var result = await runner.RunAsync(
+            new Operations.StagedCompressInput("q.pdf", input, input, 150, 75, true, true),
+            null, null, CancellationToken.None);
+        Assert(!result.Outcome.Succeeded, "output over the original input must be refused");
+        Assert(!downsampled && !ran, "nothing may run when output equals input");
+    }
+
+    private static Task CsvFieldNeutralizesFormulas()
+    {
+        Assert(Operations.DecryptPage.CsvField("=HYPERLINK(\"x\")") == "\"'=HYPERLINK(\"\"x\"\")\"", "formula not neutralized");
+        Assert(Operations.DecryptPage.CsvField("@SUM(A1)") == "'@SUM(A1)", "@ formula not neutralized");
+        Assert(Operations.DecryptPage.CsvField("plain.pdf") == "plain.pdf", "plain value changed");
         return Task.CompletedTask;
     }
 
@@ -839,6 +897,7 @@ public static class Program
                     new CompressRequest(qpdf, result.QdfPath!, false, compressed, 75),
                     null, CancellationToken.None, true);
                 Assert(outcome.Succeeded, outcome.Details);
+                Assert(!outcome.HasWarnings, $"spliced QDF must be structurally clean: {outcome.Details}");
                 var before = new FileInfo(pdf).Length;
                 var after = new FileInfo(compressed).Length;
                 Console.WriteLine($"SIZE {before} -> {after} ({(double)after / before:P0})");
@@ -906,6 +965,10 @@ public static class Program
                     new CompressRequest(qpdf, result.QdfPath!, false, compressed, 75),
                     null, CancellationToken.None, true);
                 Assert(outcome.Succeeded, outcome.Details);
+                Assert(!outcome.HasWarnings, $"spliced QDF must be structurally clean: {outcome.Details}");
+                var qdfText = System.Text.Encoding.Latin1.GetString(await File.ReadAllBytesAsync(result.QdfPath!));
+                Assert(qdfText.Contains("/Filter /DCTDecode"), "re-encoded Flate image must be marked DCTDecode");
+                Assert(!qdfText.Contains("endstreamendstream"), "splice duplicated endstream");
                 var before = new FileInfo(pdf).Length;
                 var after = new FileInfo(compressed).Length;
                 Console.WriteLine($"SIZE-FLATE {before} -> {after} ({(double)after / before:P0})");
