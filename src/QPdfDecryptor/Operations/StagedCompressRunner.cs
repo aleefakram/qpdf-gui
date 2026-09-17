@@ -73,7 +73,11 @@ internal sealed class StagedCompressRunner
                         step = null;
                     }
 
-                    if (step is not null && step.Applied && step.QdfPath is not null)
+                    if (step?.SkipReason is not null)
+                    {
+                        note = step.SkipReason;
+                    }
+                    else if (step is not null && step.Applied && step.QdfPath is not null)
                     {
                         effectiveInput = step.QdfPath;
                         downsampled = step.QdfPath;

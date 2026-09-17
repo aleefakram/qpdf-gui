@@ -15,7 +15,13 @@ public partial class OrganizePage : UserControl, IBusyPage
 
     public bool IsBusy => viewModel.IsBusy;
 
-    public void OnShellClosing() => viewModel.RunCommand.Cancel();
+    private CancellationTokenSource pageCountLookup = new();
+
+    public void OnShellClosing()
+    {
+        viewModel.RunCommand.Cancel();
+        pageCountLookup.Cancel();
+    }
 
     public OrganizePage()
     {
@@ -138,10 +144,17 @@ public partial class OrganizePage : UserControl, IBusyPage
         var requested = path;
         viewModel.InputPath = requested;
         viewModel.KnownPageCount = null;
+        // A newer input or closing the window kills this lookup's qpdf process.
+        pageCountLookup.Cancel();
+        pageCountLookup = new CancellationTokenSource();
         int? pageCount;
         try
         {
-            pageCount = await PageCountService.GetPageCountAsync(QpdfLocator.Path, requested, CancellationToken.None);
+            pageCount = await PageCountService.GetPageCountAsync(QpdfLocator.Path, requested, pageCountLookup.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

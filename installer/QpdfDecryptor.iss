@@ -29,8 +29,8 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 VersionInfoVersion={#AppVersion}
-VersionInfoDescription=qpdf Decryptor Installer
-VersionInfoProductName=qpdf Decryptor
+VersionInfoDescription=PDF Ninja Installer
+VersionInfoProductName=PDF Ninja
 VersionInfoProductVersion={#AppVersion}
 
 [Tasks]
@@ -38,10 +38,16 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#SourceDir}\QpdfDecryptor.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\Native\*"; DestDir: "{app}\Native"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+; Shortcuts from the pre-rename "qpdf Decryptor" releases
+Type: files; Name: "{autoprograms}\qpdf Decryptor.lnk"
+Type: files; Name: "{autodesktop}\qpdf Decryptor.lnk"
 
 [Icons]
-Name: "{autoprograms}\qpdf Decryptor"; Filename: "{app}\QpdfDecryptor.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\qpdf Decryptor"; Filename: "{app}\QpdfDecryptor.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\PDF Ninja"; Filename: "{app}\QpdfDecryptor.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\PDF Ninja"; Filename: "{app}\QpdfDecryptor.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\QpdfDecryptor.exe"; Description: "Launch qpdf Decryptor"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\QpdfDecryptor.exe"; Description: "Launch PDF Ninja"; Flags: nowait postinstall skipifsilent

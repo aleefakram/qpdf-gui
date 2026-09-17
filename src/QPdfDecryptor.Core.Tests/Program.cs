@@ -114,6 +114,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Validation failure becomes a failed outcome, not an exception", ValidationFailureBecomesOutcome),
     ("Split collision refusal maps to an actionable message", SplitRefusalMessage),
     ("Executor surfaces split collision as the actionable message", ExecutorSurfacesSplitCollisionMessage),
+    ("Split move failure restores previously existing files", SplitMoveFailureRestoresPreviousFiles),
     ("Executor forwards write progress percentages", ExecutorForwardsWriteProgressPercentages)
 };
 
@@ -1169,6 +1170,7 @@ static async Task ExecutorMovesSplitSiblingsOntoTargetStems()
     {
         var input = Path.Combine(workspace, "in.txt");
         await File.WriteAllTextAsync(input, "x");
+        await File.WriteAllTextAsync(Path.Combine(workspace, "base-notes.txt"), new string('n', 1000));
 
         var outcome = await QpdfOperationService.RunAsync(
             new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")));
@@ -1177,7 +1179,9 @@ static async Task ExecutorMovesSplitSiblingsOntoTargetStems()
         Assert(File.Exists(Path.Combine(workspace, "base-1-2.pdf")), "first split sibling was not moved onto the target stem");
         Assert(File.Exists(Path.Combine(workspace, "base-3-4.pdf")), "second split sibling was not moved onto the target stem");
         Assert(!Directory.EnumerateFiles(workspace).Any(f => f.Contains(".tmp")), "a temporary artifact was left behind");
-        Assert(outcome.OutputBytes > 0, "expected size reporting");
+        var written = new FileInfo(Path.Combine(workspace, "base-1-2.pdf")).Length +
+                      new FileInfo(Path.Combine(workspace, "base-3-4.pdf")).Length;
+        Assert(outcome.OutputBytes == written, $"size must count only written files: {outcome.OutputBytes} != {written}");
     }
     finally
     {
@@ -1332,6 +1336,38 @@ static async Task ExecutorSurfacesSplitCollisionMessage()
         Assert(!outcome.Succeeded, "An existing split output was overwritten.");
         Assert(outcome.FriendlyError.Contains("already exist", StringComparison.Ordinal),
             "unexpected message: " + outcome.FriendlyError);
+    }
+    finally
+    {
+        Directory.Delete(workspace, recursive: true);
+    }
+}
+
+static async Task SplitMoveFailureRestoresPreviousFiles()
+{
+    var workspace = CreateTestDirectory();
+    try
+    {
+        var input = Path.Combine(workspace, "in.txt");
+        await File.WriteAllTextAsync(input, "x");
+        var first = Path.Combine(workspace, "base-1-2.pdf");
+        var second = Path.Combine(workspace, "base-3-4.pdf");
+        await File.WriteAllTextAsync(first, "old1");
+        await File.WriteAllTextAsync(second, "old2");
+
+        OperationOutcome outcome;
+        using (new FileStream(second, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            outcome = await QpdfOperationService.RunAsync(
+                new SplitRequest(Environment.ProcessPath!, input, 2, Path.Combine(workspace, "base.pdf")),
+                allowOverwrite: true);
+        }
+
+        Assert(!outcome.Succeeded, "a locked destination must fail the split");
+        Assert(await File.ReadAllTextAsync(first) == "old1", "an already-replaced file was not restored");
+        Assert(await File.ReadAllTextAsync(second) == "old2", "the locked file changed");
+        Assert(Directory.EnumerateFiles(workspace).Count() == 3, "leftover temp or backup files: " +
+            string.Join(", ", Directory.EnumerateFiles(workspace).Select(Path.GetFileName)));
     }
     finally
     {

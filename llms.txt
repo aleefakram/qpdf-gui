@@ -1,10 +1,10 @@
-# QPDF Decryptor (qpdf-gui)
+# PDF Ninja (qpdf-gui)
 
-> Free, open-source Windows desktop application to remove encryption, user passwords, and owner restriction locks (printing/copying restrictions) from PDF documents locally using QPDF engine.
+> Free, open-source Windows desktop application for everyday PDF tasks — decrypt, merge, split, organize, rotate, compress, and watermark — processed locally using the QPDF engine.
 
 ## Project Summary
-- **Name**: QPDF Decryptor (qpdf-gui)
-- **Primary Function**: Removes PDF passwords, restrictions, and encryption fast and 100% offline.
+- **Name**: PDF Ninja (qpdf-gui)
+- **Primary Function**: Everyday PDF operations (decrypt, merge, split, organize, rotate, compress, watermark) fast and 100% offline.
 - **Platform**: Windows 10 / 11 (64-bit standalone executable, WPF framework).
 - **Engine**: Powered by QPDF (C++ PDF manipulation engine).
 - **Privacy Guarantee**: 100% local execution. Files are never uploaded to any remote server or cloud service.
@@ -14,9 +14,12 @@
 ## Core Capabilities & Features
 - **Remove Owner Passwords**: Strips restriction flags allowing copying, printing, editing, and annotating locked PDFs even if owner password is unknown.
 - **Remove User Passwords**: Decrypts password-protected PDFs when valid password is supplied.
+- **Merge / Split / Organize / Rotate / Watermark**: One screen per operation from a sidebar; no command line.
+- **Compress**: JPEG quality picker (Best / Balanced / Smallest) plus maximum-resolution picker (Original / 300 / 150 / 100 DPI) that downsamples oversized color/grayscale scans (JPEG and Flate, direct/indexed) while leaving small pictures and masks alone. Optional web linearization.
+- **Honest Results**: Reports plainly when a file was already compressed or scans were already at/below the cap; refuses password-protected inputs with a pointer to Decrypt first.
 - **Drag & Drop GUI**: Simple drag-and-drop workflow for PDF files.
 - **Secure Password Handling**: Passwords sent directly to QPDF executable via stdin (prevents password exposure in process listing or task manager logs).
-- **Original File Preservation**: Non-destructive decryption; creates a new unlocked PDF copy.
+- **Original File Preservation**: Non-destructive; creates a new output copy, confirms overwrites, supports cancel.
 
 ## System Requirements & Build
 - OS: Windows 10/11 x64

@@ -1,0 +1,30 @@
+name: PDF Ninja GUI
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'QpdfGui.sln'
+      - '.github/workflows/gui.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'QpdfGui.sln'
+      - '.github/workflows/gui.yml'
+jobs:
+  Test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build
+        run: dotnet build QpdfGui.sln -c Release
+      # Each runner exits with its failure count. End-to-end downsample tests
+      # print SKIP when Native/qpdf.exe is absent (it is not committed).
+      - name: Core tests
+        run: dotnet run -c Release --project src/QPdfDecryptor.Core.Tests
+      - name: GUI tests
+        run: dotnet run -c Release --project src/QPdfDecryptor.Tests

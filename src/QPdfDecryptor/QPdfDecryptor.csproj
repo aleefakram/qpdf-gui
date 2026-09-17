@@ -18,6 +18,8 @@
              Condition="Exists('$(QpdfRuntimeDirectory)')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <!-- Ship qpdf beside the exe: self-extracting it to %TEMP% is blocked by AppLocker/WDAC policies. -->
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
 

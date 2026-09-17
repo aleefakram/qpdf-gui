@@ -11,11 +11,12 @@ namespace QPdfDecryptor.Operations;
 // Phase 1 scan compression: downsample oversized color/gray JPEG images via
 // qpdf QDF surgery, then let the normal compress pipeline run on the result.
 // v1 limits: DCTDecode (JPEG) and FlateDecode (direct RGB/gray, indexed)
-// images only, drawn via a direct "cm ... Do"
-// pair in a top-level page content stream. Skipped (left untouched):
+// images only, drawn by "Do" in a page's content streams (CTM tracked through
+// q/Q and cm). Skipped (left untouched):
 // monochrome masks, soft-masked images, inline images, form-nested images,
 // non-RGB/gray decodes, and images too small to matter.
-internal sealed record DownsampleResult(bool Applied, string? QdfPath, int ImagesDownsampled, int ImagesConsidered);
+internal sealed record DownsampleResult(bool Applied, string? QdfPath, int ImagesDownsampled, int ImagesConsidered,
+    string? SkipReason = null);
 
 internal static class ScanDownsampleService
 {
@@ -28,12 +29,7 @@ internal static class ScanDownsampleService
     private static readonly Regex PageTypePattern = new(@"/Type\s*/Page\b", RegexOptions.Compiled);
     private static readonly Regex ContentsPattern = new(@"/Contents\s*(\[(?:[^\[\]]*)\]|(?:\d+\s+\d+\s+R))",
         RegexOptions.Compiled | RegexOptions.Singleline);
-    private static readonly Regex DrawPattern = new(
-        @"([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+([-0-9.eE+]+)\s+cm\s*/(\S+?)\s+Do\b",
-        RegexOptions.Compiled);
     private static readonly Regex FilterPattern = new(@"/Filter\s*(\[[^\]]*\]|/\S+)",
-        RegexOptions.Compiled | RegexOptions.Singleline);
-    private static readonly Regex ColorSpacePattern = new(@"/ColorSpace\s*(\[[^\]]*\]|/\S+)",
         RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex DecodeParmsPattern = new(@"/DecodeParms\s*(\[[^\]]*\]|<<.*?>>)",
         RegexOptions.Compiled | RegexOptions.Singleline);
@@ -43,6 +39,7 @@ internal static class ScanDownsampleService
 
     private const int MinPixelsToConsider = 400; // decorations and thumbnails stay untouched
     private const int MinTargetPixels = 8;
+    private const long MaxQdfBytes = 512L * 1024 * 1024;
 
     public static async Task<DownsampleResult> DownsampleAsync(
         string qpdfPath,
@@ -80,6 +77,14 @@ internal static class ScanDownsampleService
                 }
 
                 throw new InvalidOperationException("The PDF could not be read for scan optimization.");
+            }
+
+            // The QDF is held in memory as bytes plus a Latin-1 string (~3x its size); past this
+            // cap skip the pre-pass instead of risking OutOfMemory on a huge decompressed scan.
+            if (new FileInfo(qdfPath).Length > MaxQdfBytes)
+            {
+                return new DownsampleResult(false, null, 0, 0,
+                    "This PDF is too large to downsample scans — compressed without downsampling.");
             }
 
             var modified = await Task.Run(() =>
@@ -197,7 +202,11 @@ internal static class ScanDownsampleService
             return new DownsampleCounts(0, targets.Count);
         }
 
-        File.WriteAllBytes(qdfPath, SpliceImages(bytes, text, objects, replacements));
+        using (var output = File.Create(qdfPath))
+        {
+            SpliceImages(output, bytes, text, objects, replacements);
+        }
+
         return new DownsampleCounts(replacements.Count, targets.Count);
     }
 
@@ -231,13 +240,28 @@ internal static class ScanDownsampleService
     internal static Dictionary<int, QdfObject> ParseObjects(string text)
     {
         var headers = ObjHeaderPattern.Matches(text).Cast<Match>().ToList();
+        // QDF files store every stream length as its own object; index headers once so each
+        // lookup is O(1) instead of a regex scan of the whole file per stream.
+        var headerByNumber = new Dictionary<int, Match>(headers.Count);
+        foreach (var header in headers)
+        {
+            if (int.TryParse(header.Groups[1].Value, out var headerNumber))
+            {
+                headerByNumber.TryAdd(headerNumber, header);
+            }
+        }
+
         var objects = new Dictionary<int, QdfObject>(headers.Count);
         for (var index = 0; index < headers.Count; index++)
         {
-            var number = int.Parse(headers[index].Groups[1].Value);
+            if (!int.TryParse(headers[index].Groups[1].Value, out var number))
+            {
+                continue;
+            }
+
             var bodyStart = headers[index].Index + headers[index].Length;
             var bodyEnd = index + 1 < headers.Count ? headers[index + 1].Index : text.Length;
-            var obj = ParseObjectBody(number, text, bodyStart, bodyEnd);
+            var obj = ParseObjectBody(number, text, bodyStart, bodyEnd, headerByNumber);
             if (obj is not null)
             {
                 objects[number] = obj;
@@ -247,7 +271,8 @@ internal static class ScanDownsampleService
         return objects;
     }
 
-    private static QdfObject? ParseObjectBody(int number, string text, int bodyStart, int bodyEnd)
+    private static QdfObject? ParseObjectBody(int number, string text, int bodyStart, int bodyEnd,
+        Dictionary<int, Match> headerByNumber)
     {
         var dictStart = text.IndexOf("<<", bodyStart, bodyEnd - bodyStart, StringComparison.Ordinal);
         if (dictStart < 0)
@@ -274,7 +299,7 @@ internal static class ScanDownsampleService
         }
 
         var dictText = text.Substring(dictStart, dictEnd - dictStart);
-        var length = ResolveLength(dictText, text);
+        var length = ResolveLength(dictText, text, headerByNumber);
         if (length is null || length < 0 || dataStart + length.Value > bodyEnd)
         {
             return null;
@@ -312,30 +337,28 @@ internal static class ScanDownsampleService
         return -1;
     }
 
-    private static int? ResolveLength(string dictText, string fullText)
+    private static int? ResolveLength(string dictText, string fullText, Dictionary<int, Match> headerByNumber)
     {
         var match = LengthPattern.Match(dictText);
-        if (!match.Success)
+        if (!match.Success || !int.TryParse(match.Groups[1].Value, out var value))
         {
             return null;
         }
 
         if (!match.Groups[2].Success)
         {
-            return int.Parse(match.Groups[1].Value);
+            return value;
         }
 
-        // Indirect length: find the referenced object's bare integer value.
-        var refNumber = match.Groups[1].Value;
-        var refHeader = Regex.Match(fullText, $@"(?<!\d){refNumber}\s+\d+\s+obj\b");
-        if (!refHeader.Success)
+        // Indirect length: read the referenced object's bare integer value.
+        if (!headerByNumber.TryGetValue(value, out var refHeader))
         {
             return null;
         }
 
         var valueStart = refHeader.Index + refHeader.Length;
-        var valueMatch = Regex.Match(fullText.Substring(valueStart, Math.Min(64, fullText.Length - valueStart)), @"\s*(\d+)");
-        return valueMatch.Success ? int.Parse(valueMatch.Groups[1].Value) : null;
+        var valueMatch = Regex.Match(fullText.Substring(valueStart, Math.Min(64, fullText.Length - valueStart)), @"^\s*(\d+)");
+        return valueMatch.Success && int.TryParse(valueMatch.Groups[1].Value, out var length) ? length : null;
     }
 
     // Ad-hoc raw-object lookup for small text-valued references (palette
@@ -421,21 +444,105 @@ internal static class ScanDownsampleService
 
     internal static List<ImageDraw> ParseContentDraws(string content)
     {
+        // Walks operators tracking the CTM through q/Q and every cm, so an image scaled by an
+        // outer cm is sized correctly. Strings, hex strings, comments and inline image data are
+        // skipped so their bytes never read as operators. Translation is irrelevant to DPI.
         var draws = new List<ImageDraw>();
-        // Handles both single-line and split-across-lines "a b c d e f cm /Name Do".
-        foreach (Match match in DrawPattern.Matches(content))
+        var operands = new List<string>();
+        var saved = new Stack<(double A, double B, double C, double D, bool Set)>();
+        (double A, double B, double C, double D, bool Set) ctm = (1, 0, 0, 1, false);
+        var index = 0;
+        while (index < content.Length)
         {
-            // PDF numbers are culture-invariant; a comma-decimal Windows locale must not change them.
-            if (!TryParsePdfNumber(match.Groups[1].Value, out var a) || !TryParsePdfNumber(match.Groups[2].Value, out var b) ||
-                !TryParsePdfNumber(match.Groups[3].Value, out var c) || !TryParsePdfNumber(match.Groups[4].Value, out var d))
+            var ch = content[index];
+            if (char.IsWhiteSpace(ch) || ch is '[' or ']' or '{' or '}' or '>')
             {
-                continue;
+                index++;
             }
+            else if (ch == '%')
+            {
+                while (index < content.Length && content[index] is not ('\r' or '\n'))
+                {
+                    index++;
+                }
+            }
+            else if (ch == '(')
+            {
+                index = TryExtractBalancedLiteral(content, index, out var close) ? close + 1 : content.Length;
+                operands.Add("()");
+            }
+            else if (ch == '<')
+            {
+                if (index + 1 < content.Length && content[index + 1] == '<')
+                {
+                    index += 2;
+                }
+                else
+                {
+                    var close = content.IndexOf('>', index);
+                    index = close < 0 ? content.Length : close + 1;
+                    operands.Add("<>");
+                }
+            }
+            else
+            {
+                var start = index;
+                index++;
+                while (index < content.Length && !char.IsWhiteSpace(content[index]) &&
+                       content[index] is not ('(' or ')' or '<' or '>' or '[' or ']' or '{' or '}' or '/' or '%'))
+                {
+                    index++;
+                }
 
-            draws.Add(new ImageDraw(a, b, c, d, match.Groups[7].Value));
+                var token = content[start..index];
+                if (token[0] == '/' || TryParsePdfNumber(token, out _))
+                {
+                    operands.Add(token);
+                    continue;
+                }
+
+                switch (token)
+                {
+                    case "q":
+                        saved.Push(ctm);
+                        break;
+                    case "Q" when saved.Count > 0:
+                        ctm = saved.Pop();
+                        break;
+                    case "cm" when operands.Count >= 6 &&
+                                   TryParsePdfNumber(operands[^6], out var a) && TryParsePdfNumber(operands[^5], out var b) &&
+                                   TryParsePdfNumber(operands[^4], out var c) && TryParsePdfNumber(operands[^3], out var d):
+                        ctm = (a * ctm.A + b * ctm.C, a * ctm.B + b * ctm.D, c * ctm.A + d * ctm.C, c * ctm.B + d * ctm.D, true);
+                        break;
+                    // A bare Do in an untouched CTM is ignored: its size is unknowable here.
+                    case "Do" when ctm.Set && operands.Count > 0 && operands[^1].StartsWith('/'):
+                        draws.Add(new ImageDraw(ctm.A, ctm.B, ctm.C, ctm.D, operands[^1][1..]));
+                        break;
+                    case "ID":
+                        index = SkipInlineImageData(content, index);
+                        break;
+                }
+
+                operands.Clear();
+            }
         }
 
         return draws;
+    }
+
+    // Inline image bytes run from after "ID" to a whitespace-delimited "EI".
+    private static int SkipInlineImageData(string content, int index)
+    {
+        for (var i = index + 1; i + 1 < content.Length; i++)
+        {
+            if (content[i] == 'E' && content[i + 1] == 'I' && char.IsWhiteSpace(content[i - 1]) &&
+                (i + 2 == content.Length || char.IsWhiteSpace(content[i + 2])))
+            {
+                return i + 2;
+            }
+        }
+
+        return content.Length;
     }
 
     private static bool TryParsePdfNumber(string text, out double value) =>
@@ -464,64 +571,64 @@ internal static class ScanDownsampleService
                 continue;
             }
 
+            // A /Contents array is one logical stream: the graphics state carries across parts.
+            // If any part is missing or still encoded, the CTM cannot be tracked, so skip the page.
+            var parts = new List<string>();
             foreach (var contentNumber in ExtractContentNumbers(dictText))
             {
-                if (!objects.TryGetValue(contentNumber, out var content) || !content.HasStream)
+                if (!objects.TryGetValue(contentNumber, out var content) || !content.HasStream ||
+                    text.Substring(content.DictOffset, content.DictLength).Contains("/Filter", StringComparison.Ordinal))
+                {
+                    parts.Clear();
+                    break;
+                }
+
+                parts.Add(text.Substring(content.StreamOffset, content.StreamLength));
+            }
+
+            foreach (var draw in ParseContentDraws(string.Join("\n", parts)))
+            {
+                if (!xobjects.TryGetValue(draw.Name, out var imageNumber) ||
+                    !objects.TryGetValue(imageNumber, out var image) || !image.HasStream)
                 {
                     continue;
                 }
 
-                var contentDict = text.Substring(content.DictOffset, content.DictLength);
-                if (contentDict.Contains("/Filter", StringComparison.Ordinal))
+                var imageDict = text.Substring(image.DictOffset, image.DictLength);
+                if (!IsImageDict(imageDict, out var width, out var height) ||
+                    width < MinPixelsToConsider || height < MinPixelsToConsider)
                 {
-                    continue; // still encoded: cannot read draws safely
+                    continue;
                 }
 
-                var contentText = text.Substring(content.StreamOffset, content.StreamLength);
-                foreach (var draw in ParseContentDraws(contentText))
+                var drawnWidth = Math.Sqrt(draw.A * draw.A + draw.B * draw.B);
+                var drawnHeight = Math.Sqrt(draw.C * draw.C + draw.D * draw.D);
+                var dpiX = EffectiveDpi(width, drawnWidth);
+                var dpiY = EffectiveDpi(height, drawnHeight);
+                if (dpiX <= 0 || dpiY <= 0)
                 {
-                    if (!xobjects.TryGetValue(draw.Name, out var imageNumber) ||
-                        !objects.TryGetValue(imageNumber, out var image) || !image.HasStream)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    var imageDict = text.Substring(image.DictOffset, image.DictLength);
-                    if (!IsImageDict(imageDict, out var width, out var height) ||
-                        width < MinPixelsToConsider || height < MinPixelsToConsider)
-                    {
-                        continue;
-                    }
+                var scale = Math.Min(maxDpi / dpiX, maxDpi / dpiY);
+                if (scale >= 1)
+                {
+                    continue;
+                }
 
-                    var drawnWidth = Math.Sqrt(draw.A * draw.A + draw.B * draw.B);
-                    var drawnHeight = Math.Sqrt(draw.C * draw.C + draw.D * draw.D);
-                    var dpiX = EffectiveDpi(width, drawnWidth);
-                    var dpiY = EffectiveDpi(height, drawnHeight);
-                    if (dpiX <= 0 || dpiY <= 0)
-                    {
-                        continue;
-                    }
+                var targetWidth = Math.Max(MinTargetPixels, (int)(width * scale));
+                var targetHeight = Math.Max(MinTargetPixels, (int)(height * scale));
+                if (targetWidth >= width && targetHeight >= height)
+                {
+                    continue;
+                }
 
-                    var scale = Math.Min(maxDpi / dpiX, maxDpi / dpiY);
-                    if (scale >= 1)
-                    {
-                        continue;
-                    }
-
-                    var targetWidth = Math.Max(MinTargetPixels, (int)(width * scale));
-                    var targetHeight = Math.Max(MinTargetPixels, (int)(height * scale));
-                    if (targetWidth >= width && targetHeight >= height)
-                    {
-                        continue;
-                    }
-
-                    // Shared image across draws: keep the LARGEST required target so a
-                    // thumbnail use can never destroy the full-page rendering.
-                    if (!targets.TryGetValue(imageNumber, out var existing) ||
-                        targetWidth * (long)targetHeight > existing.Width * (long)existing.Height)
-                    {
-                        targets[imageNumber] = new TargetSize(targetWidth, targetHeight);
-                    }
+                // Shared image across draws: keep the LARGEST required target so a
+                // thumbnail use can never destroy the full-page rendering.
+                if (!targets.TryGetValue(imageNumber, out var existing) ||
+                    targetWidth * (long)targetHeight > existing.Width * (long)existing.Height)
+                {
+                    targets[imageNumber] = new TargetSize(targetWidth, targetHeight);
                 }
             }
         }
@@ -1191,10 +1298,9 @@ internal static class ScanDownsampleService
         return bgr;
     }
 
-    internal static byte[] SpliceImages(byte[] bytes, string text, Dictionary<int, QdfObject> objects,
+    internal static void SpliceImages(Stream spliced, byte[] bytes, string text, Dictionary<int, QdfObject> objects,
         List<ImageReplacement> replacements)
     {
-        using var spliced = new MemoryStream(bytes.Length);
         var cursor = 0;
         var shifts = new List<(int Offset, int Delta)>(replacements.Count);
         foreach (var replacement in replacements.OrderBy(r => objects[r.ObjectNumber].DictOffset))
@@ -1223,7 +1329,7 @@ internal static class ScanDownsampleService
         if (xrefStart < cursor)
         {
             spliced.Write(bytes, cursor, bytes.Length - cursor);
-            return spliced.ToArray();
+            return;
         }
 
         spliced.Write(bytes, cursor, xrefStart - cursor);
@@ -1233,7 +1339,6 @@ internal static class ScanDownsampleService
         xref = StartXrefPattern.Replace(xref, m => $"startxref\n{Shift(long.Parse(m.Groups[1].Value))}");
         var xrefBytes = Latin1.GetBytes(xref);
         spliced.Write(xrefBytes, 0, xrefBytes.Length);
-        return spliced.ToArray();
     }
 
     // After the replaced stream data, the original file has "<EOL>endstream".
@@ -1263,10 +1368,74 @@ internal static class ScanDownsampleService
         rewritten = FilterPattern.IsMatch(rewritten)
             ? FilterPattern.Replace(rewritten, "/Filter /DCTDecode")
             : rewritten.Insert(rewritten.IndexOf("<<", StringComparison.Ordinal) + 2, " /Filter /DCTDecode");
-        var colorSpace = replacement.Gray ? "/DeviceGray" : "/DeviceRGB";
-        rewritten = ColorSpacePattern.Replace(rewritten, $"/ColorSpace {colorSpace}");
+        // An index-range /Decode (e.g. [0 1]) is wrong once samples are expanded to gray/RGB.
+        if (Regex.IsMatch(rewritten, @"/ColorSpace\s*\[\s*/Indexed"))
+        {
+            rewritten = Regex.Replace(rewritten, @"/Decode\s*\[[^\]]*\]", string.Empty);
+        }
+
+        rewritten = ReplaceColorSpace(rewritten, replacement.Gray ? "/DeviceGray" : "/DeviceRGB");
         rewritten = Regex.Replace(rewritten, @"/BitsPerComponent\s+\d+", "/BitsPerComponent 8");
         rewritten = DecodeParmsPattern.Replace(rewritten, string.Empty);
         return rewritten;
+    }
+
+    // Replaces a name or array /ColorSpace value whole. A regex stopping at the first ']' would
+    // cut an Indexed palette literal that contains 0x5D. Indirect references stay untouched.
+    private static string ReplaceColorSpace(string dictText, string colorSpace)
+    {
+        var key = dictText.IndexOf("/ColorSpace", StringComparison.Ordinal);
+        if (key < 0)
+        {
+            return dictText;
+        }
+
+        var valueStart = SkipWhitespace(dictText, key + "/ColorSpace".Length, dictText.Length);
+        var valueEnd = valueStart;
+        if (valueStart < dictText.Length && dictText[valueStart] == '/')
+        {
+            valueEnd++;
+            while (valueEnd < dictText.Length && !char.IsWhiteSpace(dictText[valueEnd]) &&
+                   dictText[valueEnd] is not ('/' or '[' or '<' or '>' or '('))
+            {
+                valueEnd++;
+            }
+        }
+        else if (valueStart < dictText.Length && dictText[valueStart] == '[')
+        {
+            var depth = 0;
+            for (; valueEnd < dictText.Length; valueEnd++)
+            {
+                var ch = dictText[valueEnd];
+                if (ch == '(' && TryExtractBalancedLiteral(dictText, valueEnd, out var close))
+                {
+                    valueEnd = close;
+                }
+                else if (ch == '<' && dictText.IndexOf('>', valueEnd) is var hexEnd and >= 0)
+                {
+                    valueEnd = hexEnd;
+                }
+                else if (ch == '[')
+                {
+                    depth++;
+                }
+                else if (ch == ']' && --depth == 0)
+                {
+                    valueEnd++;
+                    break;
+                }
+            }
+
+            if (depth != 0)
+            {
+                return dictText;
+            }
+        }
+        else
+        {
+            return dictText;
+        }
+
+        return dictText[..key] + "/ColorSpace " + colorSpace + dictText[valueEnd..];
     }
 }

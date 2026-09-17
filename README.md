@@ -32,6 +32,10 @@ Built on top of [QPDF](https://github.com/qpdf/qpdf), which handles the native C
 - **Process-Level Password Security**: Passwords are passed directly to `qpdf` via `stdin`, keeping them out of Task Manager and process log arguments.
 - **Non-Destructive**: Generates a decrypted copy while leaving your original PDF intact.
 - **Bulk Folder Decryption**: Decrypt every PDF in a folder in one run — with one shared password, or a password list tried against each file until one works.
+- **Merge, Split, Organize, Rotate, Watermark**: Reorder, extract, rotate, and stamp pages from a plain-language sidebar — one screen per operation, no command line.
+- **Compress with control**: JPEG quality picker (Best / Balanced / Smallest) plus a maximum-resolution picker (Original / 300 / 150 / 100 DPI) that downsamples oversized color and grayscale scans while leaving small pictures and masks alone. A web-optimization toggle speeds up first-page loading.
+- **Honest results**: If a file was already well compressed, the app says so plainly instead of celebrating a no-op. Password-protected inputs are refused with a pointer to Decrypt first.
+- **Safe by default**: Explicit output locations, overwrite confirmation, cancel on every run, and the original file is never modified.
 
 ---
 
@@ -52,9 +56,19 @@ PDF Ninja runs entirely on your desktop:
 
 1. Download the latest installer or portable executable from [Releases](https://github.com/aleefakram/qpdf-gui/releases/tag/v1.0.0).
 2. Launch `QpdfDecryptor.exe`.
-3. Drag & drop a PDF onto the window (or click **Choose PDF**).
-4. Enter the password if required (leave blank if stripping printing/copying restrictions).
-5. Click **Decrypt PDF**.
+3. Pick an operation from the sidebar (Decrypt, Merge, Split, Organize, Rotate, Compress, Watermark) and follow the single screen.
+4. Drag & drop a PDF onto the window (or click **Choose PDF**), choose where to save, and run.
+
+### Decrypting a single file
+
+1. Enter the password if required (leave blank if stripping printing/copying restrictions).
+2. Click **Decrypt PDF**.
+
+### Compressing a scan
+
+1. Pick **Image quality** (Balanced suits most scans) and **Maximum resolution**.
+2. Leave resolution on **Original** to only re-encode, or choose **150 DPI** for small files that stay readable (**100 DPI** suits large text only).
+3. Click **Compress PDF**. The result states what happened — including when scans were already at or below the cap and nothing was downsampled.
 
 ### Decrypting a whole folder
 
@@ -113,10 +127,11 @@ llms.txt                  Machine-readable overview manifest
 
 ## Running Tests
 
-Tests run against an internal mock process framework without needing a native `qpdf` executable installed:
+Tests are console harnesses. The Core suite uses an internal fake-`qpdf` process pattern and needs no native binary; the app suite additionally exercises the real bundled `qpdf` end to end where available (skipped otherwise):
 
 ```powershell
 dotnet run --project src/QPdfDecryptor.Core.Tests
+dotnet run --project src/QPdfDecryptor.Tests
 ```
 
 ---
@@ -125,7 +140,7 @@ dotnet run --project src/QPdfDecryptor.Core.Tests
 
 <details>
 <summary><b>Can I unlock a PDF if I can view it but can't print or copy text from it?</b></summary>
-Yes. PDFs with printing or copying restrictions use an "owner password". Leave the password field blank and click <b>Decrypt PDF</b> — QPDF Decryptor will remove those restriction locks automatically.
+Yes. PDFs with printing or copying restrictions use an "owner password". Leave the password field blank and click <b>Decrypt PDF</b> — PDF Ninja will remove those restriction locks automatically.
 </details>
 
 <details>

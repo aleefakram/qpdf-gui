@@ -77,6 +77,10 @@ public static class Program
             ("Downsample parses draws under comma-decimal culture", DownsampleDrawsParseUnderCommaDecimalCulture),
             ("Staged runner refuses output over the original input", StagedRunnerRefusesOutputOverOriginal),
             ("CSV report neutralizes spreadsheet formulas", CsvFieldNeutralizesFormulas),
+            ("Downsample draws track q/Q and nested cm", DownsampleDrawsTrackGraphicsState),
+            ("Downsample targets span a page's content streams", DownsampleTargetsSpanContentStreams),
+            ("Downsample rewrite replaces indexed colorspace whole", DownsampleRewriteDropsIndexedColorSpace),
+            ("Staged runner surfaces the pre-pass skip reason", StagedRunnerSurfacesSkipReason),
         };
 
         foreach (var test in tests)
@@ -424,6 +428,71 @@ public static class Program
             new Operations.ScanDownsampleService.ImageReplacement(5, new byte[10], 600, 750, false));
         Assert(added.Contains("/Filter /DCTDecode"), $"filter not added: {added}");
         return Task.CompletedTask;
+    }
+
+    private static Task DownsampleDrawsTrackGraphicsState()
+    {
+        var nested = Operations.ScanDownsampleService.ParseContentDraws("2 0 0 2 0 0 cm q 306 0 0 396 0 0 cm /Im1 Do Q");
+        Assert(nested.Count == 1 && Math.Abs(nested[0].A - 612) < 0.001 && Math.Abs(nested[0].D - 792) < 0.001,
+            $"outer cm must scale the draw: {string.Join(";", nested)}");
+        var restored = Operations.ScanDownsampleService.ParseContentDraws("q 0.5 0 0 0.5 0 0 cm Q 612 0 0 792 0 0 cm /Im1 Do");
+        Assert(restored.Count == 1 && Math.Abs(restored[0].A - 612) < 0.001, "Q must restore the CTM");
+        var quoted = Operations.ScanDownsampleService.ParseContentDraws(
+            "BT (612 0 0 792 0 0 cm /Im1 Do) Tj ET BI /W 2 /H 2 ID \u0001 cm /Im1 Do\u0002 EI q 306 0 0 396 0 0 cm /Im1 Do Q");
+        Assert(quoted.Count == 1 && Math.Abs(quoted[0].A - 306) < 0.001, "strings and inline image data must not count as operators");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleTargetsSpanContentStreams()
+    {
+        // The graphics state carries across a page's /Contents array.
+        const string first = "q 612 0 0 792 0 0 cm";
+        const string second = "/Im1 Do Q";
+        var qdf =
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n" +
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents [4 0 R 7 0 R] " +
+            "/Resources << /XObject << /Im1 5 0 R >> >> >>\nendobj\n" +
+            $"4 0 obj\n<< /Length {first.Length} >>\nstream\n{first}\nendstream\nendobj\n" +
+            "5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 /ColorSpace /DeviceRGB " +
+            "/BitsPerComponent 8 /Filter /DCTDecode /Length 6 0 R >>\nstream\nÿØAAAA\nendstream\nendobj\n" +
+            "6 0 obj\n4\nendobj\n" +
+            $"7 0 obj\n<< /Length {second.Length} >>\nstream\n{second}\nendstream\nendobj\n";
+        var objects = Operations.ScanDownsampleService.ParseObjects(qdf);
+        var targets = Operations.ScanDownsampleService.FindDownsampleTargets(objects, qdf, 100);
+        Assert(targets.Count == 1 && targets[5].Width == 849, "draw split across content streams was missed");
+        return Task.CompletedTask;
+    }
+
+    private static Task DownsampleRewriteDropsIndexedColorSpace()
+    {
+        // Literal palette containing ']' (0x5D) and an index-range /Decode that is wrong for RGB.
+        const string dict = "<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 " +
+            "/ColorSpace [/Indexed /DeviceRGB 1 (\u0000]\u0000\u00FF\u00FF\u00FF)] /BitsPerComponent 1 /Decode [0 1] /Length 7 0 R >>";
+        var rewritten = Operations.ScanDownsampleService.RewriteImageDict(dict,
+            new Operations.ScanDownsampleService.ImageReplacement(5, new byte[10], 600, 750, false));
+        Assert(rewritten.Contains("/ColorSpace /DeviceRGB /BitsPerComponent 8"), $"colorspace not replaced whole: {rewritten}");
+        Assert(!rewritten.Contains("/Decode") && !rewritten.Contains('\u00FF'), $"indexed leftovers remain: {rewritten}");
+
+        const string inverted = "<< /Type /XObject /Subtype /Image /Width 1200 /Height 1500 " +
+            "/ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [1 0] /Filter /DCTDecode /Length 7 0 R >>";
+        var kept = Operations.ScanDownsampleService.RewriteImageDict(inverted,
+            new Operations.ScanDownsampleService.ImageReplacement(5, new byte[10], 600, 750, true));
+        Assert(kept.Contains("/Decode [1 0]"), "a gray image's /Decode must be kept");
+        return Task.CompletedTask;
+    }
+
+    private static async Task StagedRunnerSurfacesSkipReason()
+    {
+        var runner = new Operations.StagedCompressRunner(
+            (request, allowOverwrite, progress, cancellationToken) =>
+                Task.FromResult(new OperationOutcome(true, false, 5, string.Empty, "ok")),
+            (qpdfPath, inputPath, maxDpi, jpegQuality, progress, cancellationToken) =>
+                Task.FromResult(new Operations.DownsampleResult(false, null, 0, 0, "Too large to downsample.")));
+        var result = await runner.RunAsync(
+            new Operations.StagedCompressInput("q.pdf", "in.pdf", "o.pdf", 150, 75, true, false),
+            null, null, CancellationToken.None);
+        Assert(result.Note == "Too large to downsample.", $"skip reason not surfaced: {result.Note}");
     }
 
     private static Task DownsampleDrawsParseUnderCommaDecimalCulture()

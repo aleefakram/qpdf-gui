@@ -47,9 +47,10 @@ public static partial class QpdfOperationService
                 .Where(value => value.Length > 0));
             if ((result.ExitCode is 0 or 3) && TargetFilesExist(temporaryOutputPath))
             {
-                MoveOutputsToTarget(temporaryOutputPath, operation.OutputPath, allowOverwrite);
+                var written = MoveOutputsToTarget(temporaryOutputPath, operation.OutputPath, allowOverwrite);
                 progress?.Report(100);
-                return new OperationOutcome(true, result.ExitCode == 3, OutputSize(operation.OutputPath), string.Empty, details);
+                var outputBytes = written.Sum(path => new FileInfo(path).Length);
+                return new OperationOutcome(true, result.ExitCode == 3, outputBytes, string.Empty, details);
             }
 
             return new OperationOutcome(false, false, null, FriendlyError(details), details);
@@ -100,13 +101,14 @@ public static partial class QpdfOperationService
     private static bool TargetFilesExist(string temporaryOutputPath) =>
         TempOutputMatches(temporaryOutputPath).Any();
 
-    private static void MoveOutputsToTarget(string temporaryOutputPath, string targetPath, bool allowOverwrite)
+    // Returns the files written, so size reporting never counts unrelated look-alike names.
+    private static IReadOnlyList<string> MoveOutputsToTarget(string temporaryOutputPath, string targetPath, bool allowOverwrite)
     {
         var matches = TempOutputMatches(temporaryOutputPath).ToList();
         if (matches.Count == 1 && Path.GetFullPath(matches[0]) == Path.GetFullPath(temporaryOutputPath))
         {
             File.Move(temporaryOutputPath, targetPath, overwrite: allowOverwrite);
-            return;
+            return [targetPath];
         }
 
         var targetDirectory = Path.GetDirectoryName(Path.GetFullPath(targetPath))!;
@@ -129,10 +131,58 @@ public static partial class QpdfOperationService
             moves.Add((produced, destination));
         }
 
-        foreach (var (source, destination) in moves)
+        // All-or-nothing: set replaced files aside first, and restore them if any move fails
+        // (e.g. one output is open in a viewer), so a split never leaves a mixed set behind.
+        var done = new List<(string Source, string Destination, string? Backup)>(moves.Count);
+        try
         {
-            File.Move(source, destination, overwrite: allowOverwrite);
+            foreach (var (source, destination) in moves)
+            {
+                string? backup = null;
+                if (File.Exists(destination))
+                {
+                    backup = $"{destination}.{Guid.NewGuid():N}.bak";
+                    File.Move(destination, backup);
+                }
+
+                done.Add((source, destination, backup));
+                File.Move(source, destination);
+            }
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            foreach (var (source, destination, backup) in Enumerable.Reverse(done))
+            {
+                if (File.Exists(destination) && !File.Exists(source))
+                {
+                    File.Move(destination, source);
+                }
+
+                if (backup is not null && File.Exists(backup))
+                {
+                    File.Move(backup, destination);
+                }
+            }
+
+            throw;
+        }
+
+        foreach (var (_, _, backup) in done)
+        {
+            if (backup is not null)
+            {
+                try
+                {
+                    File.Delete(backup);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // The split itself succeeded; a stray backup must not turn it into a failure.
+                }
+            }
+        }
+
+        return moves.Select(move => move.Destination).ToList();
     }
 
     private static IEnumerable<string> TempOutputMatches(string temporaryOutputPath)
@@ -143,31 +193,6 @@ public static partial class QpdfOperationService
         return Directory.Exists(directory)
             ? Directory.EnumerateFiles(directory, stem + "*")
             : [];
-    }
-
-    private static long? OutputSize(string targetPath)
-    {
-        var fullTargetPath = Path.GetFullPath(targetPath);
-        if (File.Exists(fullTargetPath))
-        {
-            return new FileInfo(fullTargetPath).Length;
-        }
-
-        // Split runs never produce the exact target file, only <stem><suffix> siblings.
-        var directory = Path.GetDirectoryName(fullTargetPath)!;
-        var stem = Path.GetFileNameWithoutExtension(fullTargetPath);
-        if (!Directory.Exists(directory))
-        {
-            return null;
-        }
-
-        long total = 0;
-        foreach (var produced in Directory.EnumerateFiles(directory, stem + "*"))
-        {
-            total += new FileInfo(produced).Length;
-        }
-
-        return total > 0 ? total : null;
     }
 
     public static string FriendlyError(string details)

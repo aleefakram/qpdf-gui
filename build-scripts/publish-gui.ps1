@@ -81,7 +81,7 @@ try {
         "-p:QpdfRuntimeDirectory=$preparedRuntimeDirectory" `
         -p:PublishSingleFile=true `
         -p:IncludeNativeLibrariesForSelfExtract=true `
-        -p:IncludeAllContentForSelfExtract=true `
+        -p:IncludeAllContentForSelfExtract=false `
         -p:EnableCompressionInSingleFile=true `
         -p:PublishReadyToRun=false `
         -o $stagingDirectory
@@ -97,6 +97,11 @@ try {
 
     if ((Get-Item $stagedExecutable).Length -eq 0) {
         throw "dotnet publish created an empty executable at '$stagedExecutable'."
+    }
+
+    # qpdf ships beside the exe (not self-extracted to %TEMP%, which AppLocker/WDAC policies often block).
+    if (-not (Test-Path (Join-Path $stagingDirectory "Native\qpdf.exe") -PathType Leaf)) {
+        throw "dotnet publish did not place Native\qpdf.exe beside the executable."
     }
 
     if (Test-Path -LiteralPath $outputPath) {
