@@ -1976,6 +1976,13 @@ QPDFJob::handleUnderOverlay(QPDF& pdf)
         // to 11.3.0, the original page contents were wrapped in q/Q, but this didn't work if the
         // original page had unbalanced q/Q operators. See GitHub issue #904.
         auto this_page_fo = dest_page.getFormXObjectForPage();
+        // getFormXObjectForPage bounds the form by the TrimBox (falling back to the CropBox), but
+        // the form is placed centered in the MediaBox below. If that box is smaller than or not
+        // centered in the MediaBox, the original content would be clipped or shifted. Bounding it
+        // by the MediaBox makes the placement an identity transformation.
+        if (auto media_box = dest_page.getMediaBox(); media_box.isRectangle()) {
+            this_page_fo.getDict().replaceKey("/BBox", media_box.shallowCopy());
+        }
         // The resulting form xobject lazily reads the content from the original page, which we are
         // going to replace. Therefore, we have to explicitly copy it.
         auto content_data = this_page_fo.getRawStreamData();

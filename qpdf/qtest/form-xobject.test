@@ -102,5 +102,27 @@ $td->runtest("check overlay with no resources output",
              {$td->COMMAND => "qpdf-test-compare a.pdf overlay-no-resources.pdf"},
              {$td->FILE => "overlay-no-resources.pdf", $td->EXIT_STATUS => 0});
 
+# Overlay and underlay must not move or clip the original page content when the TrimBox/CropBox
+# is smaller than or not centered in the MediaBox, including with rotation, UserUnit, nonzero
+# origins, and inherited boxes.
+my @preserve_cases = (qw(offcenter centered trim rotate90 rotate180 rotate270
+                         units origin inherited outside));
+my @preserve_modes = (qw(overlay underlay));
+$n_tests += 2 * scalar(@preserve_cases) * scalar(@preserve_modes);
+foreach my $case (@preserve_cases)
+{
+    foreach my $mode (@preserve_modes)
+    {
+        $td->runtest("preserve original $case $mode",
+                     {$td->COMMAND =>
+                          "qpdf --static-id --qdf --no-original-object-ids" .
+                          " overlay-preserve-$case.pdf --$mode minimal.pdf -- a.pdf"},
+                     {$td->STRING => "", $td->EXIT_STATUS => 0});
+        $td->runtest("compare files",
+                     {$td->FILE => "a.pdf"},
+                     {$td->FILE => "overlay-preserve-$case-$mode-out.pdf"});
+    }
+}
+
 cleanup();
 $td->report($n_tests);
