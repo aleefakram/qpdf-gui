@@ -1,0 +1,4 @@
+# qpdf test fixtures and expected outputs are byte-compared; never convert line endings.
+**/qtest/** -text
+*.pdf -text
+fuzz/** -text
